@@ -1,0 +1,49 @@
+# ============================================================================
+# step-ca em paralelo (AVALIACAO / DEV) — OPT-IN, isolado do stack da CA atual.
+#
+# NAO faz parte de docker-compose.yml e nao compartilha volume/rede com ele.
+# Objetivo: avaliar o step-ca (Fase 2 do roadmap) antes de, na Fase 3, plugar
+# um StepCaEngine(CAEngine) no lugar do BashEngine — sem tocar na UI/API.
+#
+# Pre-requisito (senha da CA, NAO versionada — ver .gitignore docker/secrets/):
+#   mkdir -p docker/secrets
+#   openssl rand -base64 24 | tr -d '\n' > docker/secrets/stepca_password
+#
+# Subir:      docker compose -f docker/docker-compose.stepca.yml up -d
+# Politica:   scripts/stepca-set-policy.sh capsule.lab.br     (limita ao dominio)
+# Validar:    scripts/stepca-smoke.sh
+# Derrubar:   docker compose -f docker/docker-compose.stepca.yml down   (-v apaga a PKI)
+# ============================================================================
+name: certward-stepca
+
+services:
+  step-ca:
+    image: smallstep/step-ca:0.30.2
+    # Auto-init na 1a subida: cria root + intermediaria (2 camadas) e os
+    # provisioners JWK (admin) e ACME (auto-inscricao/renovacao das apps).
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "Capsule Corp step-ca dev"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "localhost,step-ca,stepca.capsule.lab.br"
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: "admin-jwk"
+      DOCKER_STEPCA_INIT_PASSWORD_FILE: "/run/secrets/stepca_password"
+      DOCKER_STEPCA_INIT_ACME: "true"
+      DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT: "false"
+    secrets:
+      - stepca_password
+    volumes:
+      - stepca-data:/home/step        # PKI, config e db (badger) do step-ca
+    ports:
+      - "9000:9000"                   # API HTTPS do step-ca (inclui /acme/acme/directory)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    restart: unless-stopped
+
+secrets:
+  stepca_password:
+    file: ./secrets/stepca_password
+
+volumes:
+  stepca-data:

@@ -99,7 +99,9 @@ webui/backend/
 ```
 
 Trocar o motor (ex.: por `step-ca`) = escrever um `StepCaEngine(CAEngine)` e
-plugar em `get_engine()`; a UI, a API e a auditoria não mudam.
+plugar em `get_engine()`; a UI, a API e a auditoria não mudam. Há um stack
+**opt-in** para avaliar o step-ca em paralelo (sem tocar na CA atual) —
+ver [docs/STEPCA-DEV.md](docs/STEPCA-DEV.md).
 
 Os scripts do motor atual (`scripts/init-ca.sh`, `new_cert.sh`, `revoke-cert.sh`,
 `gen-crl.sh`, `issue-admin-cert.sh`, `check-expiring.sh`) + `openssl.cnf.tmpl`
