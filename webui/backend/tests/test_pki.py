@@ -160,3 +160,18 @@ def test_load_kek_rejects_invalid(monkeypatch):
         pki.load_kek()
     monkeypatch.delenv("CA_KEK", raising=False)
     pki._FERNET = None
+
+
+def test_p12pass_store_load():
+    from ca_engine import BashEngine
+    (pki.INT / "newcerts").mkdir(parents=True, exist_ok=True)
+    pki._FERNET = None
+    eng = BashEngine()
+    eng._store_p12pass("2000", "senha-escolhida-na-emissao")
+    blob = (pki.INT / "newcerts" / "2000.p12pass.enc")
+    assert blob.exists()
+    assert b"senha-escolhida" not in blob.read_bytes()        # guardada cifrada
+    assert eng._load_p12pass("2000") == "senha-escolhida-na-emissao"
+    assert eng._load_p12pass("9999") is None                  # inexistente
+    eng._store_p12pass("2001", "")                            # vazio nao guarda
+    assert eng._load_p12pass("2001") is None
