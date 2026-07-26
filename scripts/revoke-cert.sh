@@ -17,6 +17,7 @@ CA_BASE="${CA_BASE:-/ca}"
 [ -f "${CA_BASE}/ca.env" ] && . "${CA_BASE}/ca.env"
 CONF="${CONF:-${CA_BASE}/openssl.cnf}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/lib-intpass.sh"; int_passin_args    # INTPASS=(-passin ...) da intermediaria
 
 [ $# -ge 1 ] || { echo "Uso: $0 <caminho-do-cert> [motivo]"; exit 1; }
 cert="$1"
@@ -24,7 +25,7 @@ reason="${2:-superseded}"
 [ -f "$cert" ] || { echo "Cert nao encontrado: $cert"; exit 1; }
 
 echo "==> Revogando ${cert} (motivo: ${reason})"
-openssl ca -config "$CONF" -revoke "$cert" -crl_reason "$reason"
+openssl ca -config "$CONF" "${INTPASS[@]}" -revoke "$cert" -crl_reason "$reason"
 
 echo "==> Regenerando e publicando a CRL da intermediaria"
 "${SCRIPT_DIR}/gen-crl.sh"

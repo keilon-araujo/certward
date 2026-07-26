@@ -7,6 +7,8 @@
 # O control plane (app.py) so fala com a interface. Trocar o motor para
 # step-ca no futuro = escrever um StepCaEngine(CAEngine) e plugar em get_engine().
 # ============================================================================
+import contextlib
+import fcntl
 import io
 import json
 import os
@@ -15,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -99,6 +102,38 @@ class BashEngine(CAEngine):
             raise EngineError(400, f"{script} falhou (rc={p.returncode}):\n{log}")
         return log
 
+    @contextlib.contextmanager
+    def _ca_lock(self, timeout: int = 60):
+        """Serializa operacoes que mexem no banco do openssl (index.txt/serial):
+        emissao, renovacao, revogacao, CRL. Lock de ARQUIVO (flock) — vale entre
+        processos/workers/replicas que compartilham o volume. Nao-bloqueante com
+        timeout: se a CA estiver ocupada, devolve 503 em vez de travar o request."""
+        pki.CA_BASE.mkdir(parents=True, exist_ok=True)
+        f = open(pki.CA_BASE / ".ca-op.lock", "w")
+        start = time.monotonic()
+        try:
+            while True:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() - start > timeout:
+                        raise EngineError(503, "CA ocupada com outra operacao; tente novamente")
+                    time.sleep(0.2)
+            yield
+        finally:
+            try:
+                fcntl.flock(f, fcntl.LOCK_UN)
+            finally:
+                f.close()
+
+    def _int_env(self, base=None) -> dict:
+        """Env com CA_INT_PASS (passphrase da intermediaria) para os scripts que
+        assinam. pki.load_int_passphrase resolve do secret/env ou gera a local."""
+        env = dict(base or {})
+        env["CA_INT_PASS"] = pki.load_int_passphrase()
+        return env
+
     def _cert_pem(self, serial: str) -> Path:
         if not pki.NAME_RE.match(serial):
             raise EngineError(400, "serial invalido")
@@ -167,7 +202,8 @@ class BashEngine(CAEngine):
             pki.CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
             pki.write_ca_env(cfg)
             pki.render_openssl_cnf(cfg)
-            log = self._run("init-ca.sh", [], extra_env={"CA_ROOT_PASS": passphrase}, timeout=900)
+            log = self._run("init-ca.sh", [],
+                            extra_env=self._int_env({"CA_ROOT_PASS": passphrase}), timeout=900)
         except BaseException:
             for f in (pki.CONFIG_PATH, pki.ENV_PATH, pki.OPENSSL_CNF):
                 f.unlink(missing_ok=True)
@@ -232,18 +268,22 @@ class BashEngine(CAEngine):
             raise EngineError(400, "perfil invalido")
         if key_type not in pki.KEY_TYPES:
             raise EngineError(400, "tipo de chave invalido")
-        log = self._run("new_cert.sh", [name, profile, sans, key_type], timeout=300)
-        m = _SERIAL_RE.search(log)
-        serial = m.group(1) if m else ""
-        self._protect_key(serial, pki.fname(name))
-        self._store_p12pass(serial, p12_password)
+        with self._ca_lock():
+            log = self._run("new_cert.sh", [name, profile, sans, key_type],
+                            extra_env=self._int_env(), timeout=300)
+            m = _SERIAL_RE.search(log)
+            serial = m.group(1) if m else ""
+            self._protect_key(serial, pki.fname(name))
+            self._store_p12pass(serial, p12_password)
         return log
 
     def revoke(self, serial: str, reason: str) -> str:
         if reason not in pki.REASONS:
             raise EngineError(400, "motivo invalido")
         pem = self._cert_pem(serial)
-        return self._run("revoke-cert.sh", [str(pem), reason], timeout=120)
+        with self._ca_lock():
+            return self._run("revoke-cert.sh", [str(pem), reason],
+                             extra_env=self._int_env(), timeout=120)
 
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
               revoke_old: bool, reason: str, key_type: str = "ecdsa-p256") -> str:
@@ -259,23 +299,27 @@ class BashEngine(CAEngine):
         slug = pki.fname(cn)
         if not pki.WILDCARD_RE.match(cn):
             raise EngineError(400, "CN do certificado antigo invalido")
-        if revoke_old:
-            if reason not in pki.REASONS:
-                raise EngineError(400, "motivo invalido")
-            self._run("revoke-cert.sh", [str(certpem), reason], timeout=120)
-        # limpa os arquivos de trabalho por-CN (o novo cert usa novo serial/chave)
-        for p in (pki.INT / "certs" / f"{slug}.crt", pki.INT / "certs" / f"{slug}.chain.crt",
-                  pki.INT / "private" / f"{slug}.key", pki.INT / "reqs" / f"{slug}.csr"):
-            p.unlink(missing_ok=True)
-        log = self._run("new_cert.sh", [cn, profile, sans, key_type], timeout=300)
-        m = _SERIAL_RE.search(log)
-        newserial = m.group(1) if m else ""
-        self._protect_key(newserial, slug)
-        self._store_p12pass(newserial, p12_password)
+        if revoke_old and reason not in pki.REASONS:
+            raise EngineError(400, "motivo invalido")
+        with self._ca_lock():
+            if revoke_old:
+                self._run("revoke-cert.sh", [str(certpem), reason],
+                          extra_env=self._int_env(), timeout=120)
+            # limpa os arquivos de trabalho por-CN (o novo cert usa novo serial/chave)
+            for p in (pki.INT / "certs" / f"{slug}.crt", pki.INT / "certs" / f"{slug}.chain.crt",
+                      pki.INT / "private" / f"{slug}.key", pki.INT / "reqs" / f"{slug}.csr"):
+                p.unlink(missing_ok=True)
+            log = self._run("new_cert.sh", [cn, profile, sans, key_type],
+                            extra_env=self._int_env(), timeout=300)
+            m = _SERIAL_RE.search(log)
+            newserial = m.group(1) if m else ""
+            self._protect_key(newserial, slug)
+            self._store_p12pass(newserial, p12_password)
         return log
 
     def regenerate_crl(self) -> str:
-        return self._run("gen-crl.sh", [], timeout=120)
+        with self._ca_lock():
+            return self._run("gen-crl.sh", [], extra_env=self._int_env(), timeout=120)
 
     # ------------------------------------------------------------------ OCSP
     def ocsp_status(self, serial: str) -> dict:

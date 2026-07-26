@@ -162,6 +162,31 @@ def test_load_kek_rejects_invalid(monkeypatch):
     pki._FERNET = None
 
 
+def test_load_int_passphrase(monkeypatch):
+    # secret/env tem precedencia
+    monkeypatch.setenv("CA_INT_PASS", "passphrase-via-env")
+    assert pki.load_int_passphrase() == "passphrase-via-env"
+    monkeypatch.delenv("CA_INT_PASS", raising=False)
+    # fallback local: gera e persiste em /ca/int_pass
+    pki.INT_PASS_PATH.unlink(missing_ok=True)
+    pw = pki.load_int_passphrase()
+    assert pw and pki.INT_PASS_PATH.exists()
+    assert pki.load_int_passphrase() == pw          # estavel (le o arquivo)
+
+
+def test_ca_lock_serializes():
+    from ca_engine import BashEngine
+    eng = BashEngine()
+    with eng._ca_lock():
+        with pytest.raises(EngineError) as ei:      # segundo acesso concorrente -> 503
+            with eng._ca_lock(timeout=0):
+                pass
+        assert ei.value.status == 503
+    # apos liberar, adquire normalmente
+    with eng._ca_lock(timeout=1):
+        pass
+
+
 def test_p12pass_store_load():
     from ca_engine import BashEngine
     (pki.INT / "newcerts").mkdir(parents=True, exist_ok=True)
