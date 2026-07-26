@@ -1,3 +1,5 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-cryptography>=42.0
+# Dependencias de runtime — versoes fixas para build reproduzivel.
+# (evolucao futura: lock completo com pip-compile / requirements.lock)
+fastapi==0.140.0
+uvicorn[standard]==0.51.0
+cryptography==49.0.0

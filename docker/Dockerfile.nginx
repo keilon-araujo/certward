@@ -1,5 +1,5 @@
-# nginx da Capsule Corp: traz openssl (cert temporario), a config e o entrypoint
-FROM nginx:alpine
+# nginx do certward: traz openssl (cert temporario), a config e o entrypoint
+FROM nginx:1.27-alpine
 
 RUN apk add --no-cache openssl bash
 

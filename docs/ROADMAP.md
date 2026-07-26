@@ -18,13 +18,15 @@ Princípio de sequenciamento: **melhorar só o código que sobrevive ao Plano B*
 - [x] **Camada `ca_engine`** no backend: interface `CAEngine` + `BashEngine`
       (adaptador atual). `pki.py` = helpers puros; `app.py` = só control plane.
       `EngineError` mapeado para HTTP. Trocar por `StepCaEngine` fica trivial.
-- [x] **Testes automatizados** (pytest, 38 testes) do control plane com engine
+- [x] **Testes automatizados** (pytest, 39 testes) do control plane com engine
       FAKE + da lib `pki`. **CI** (GitHub Actions) roda pytest + build das imagens.
       *(a suíte já pegou um bug real: rate-limit de login que nunca bloqueava)*
-- [ ] **Sessão fora do processo** (ou JWT assinado) para permitir múltiplos
-      workers/réplicas; hoje é em memória (1 worker).
-- [ ] **Containers non-root** + limites de recurso + imagem escaneada.
-- [ ] **Pin de dependências** (versões exatas) e `requirements` travado.
+- [x] **Sessão fora do processo** (token HMAC assinado, stateless) — permite
+      múltiplos workers/réplicas; segredo persistido em `/ca/session.secret`;
+      troca de senha invalida tokens antigos via versão (`pv`).
+- [x] **Containers non-root** (uid 10001 via `user-entrypoint.sh`/gosu) +
+      limites de recurso no compose; imagens base pinadas.
+- [x] **Pin de dependências** (versões exatas) em `requirements*.txt`.
 - [ ] Higiene: remover código morto, padronizar erros/logs estruturados.
 
 ## Fase 1 — Ganhos de segurança independentes de motor
