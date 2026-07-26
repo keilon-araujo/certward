@@ -1,5 +1,5 @@
 # Capsule Corp CA - stack de laboratorio
-# Suba com:  docker compose up -d --build   (a partir de configs-ca/docker/)
+# Suba com:  docker compose up -d --build   (a partir da pasta docker/)
 # Depois abra http://<host>/ (vhost admin) e inicialize a CA pela aba "CA / Init".
 
 services:
