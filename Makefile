@@ -1,9 +1,10 @@
-# Capsule Corp Internal CA - atalhos de operacao (Docker)
-# Uso:  make <alvo>   (ex: make up, make init PASS=... , make issue NAME=... )
+# certward - atalhos de operacao (Docker)
+# Uso:  make <alvo>   (ex: make up, make issue NAME=... , make backup BACKUP_PASS=... )
 
 COMPOSE := docker compose -f docker/docker-compose.yml
 EXEC    := $(COMPOSE) exec -T webui
 VOLUME  := docker_ca-data
+IMAGE   := certward:latest
 
 .DEFAULT_GOAL := help
 .PHONY: help up down clean rebuild logs ps issue revoke crl ls expiring shell backup restore reset-admin
@@ -53,12 +54,17 @@ expiring: ## Certs que expiram em breve. Ex: make expiring DAYS=30
 shell: ## Abre um shell no container webui
 	$(COMPOSE) exec webui bash
 
-backup: ## Backup do volume da CA -> ./ca-backup.tgz
-	docker run --rm -v $(VOLUME):/ca:ro -v "$$PWD":/backup alpine tar czf /backup/ca-backup.tgz -C /ca .
-	@echo "backup salvo em ./ca-backup.tgz"
+backup: ## Backup CIFRADO do volume -> ./ca-backup.tgz.enc  (requer BACKUP_PASS=<senha>)
+	@test -n "$(BACKUP_PASS)" || { echo "Informe BACKUP_PASS=<senha forte>"; exit 1; }
+	docker run --rm -e BACKUP_PASS='$(BACKUP_PASS)' --entrypoint sh -v $(VOLUME):/ca:ro $(IMAGE) \
+	  -c 'tar czf - -C /ca . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_PASS' > ca-backup.tgz.enc
+	@echo "backup cifrado (AES-256) salvo em ./ca-backup.tgz.enc"
 
-restore: ## Restaura ./ca-backup.tgz para o volume (SOBRESCREVE tudo)
-	docker run --rm -v $(VOLUME):/ca -v "$$PWD":/backup alpine sh -c 'find /ca -mindepth 1 -delete; tar xzf /backup/ca-backup.tgz -C /ca'
+restore: ## Restaura ./ca-backup.tgz.enc para o volume (SOBRESCREVE tudo; requer BACKUP_PASS)
+	@test -n "$(BACKUP_PASS)" || { echo "Informe BACKUP_PASS=<senha usada no backup>"; exit 1; }
+	@test -f ca-backup.tgz.enc || { echo "ca-backup.tgz.enc nao encontrado no diretorio atual"; exit 1; }
+	docker run --rm -e BACKUP_PASS='$(BACKUP_PASS)' --entrypoint sh -v $(VOLUME):/ca -v "$$PWD":/backup $(IMAGE) \
+	  -c 'set -e; openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASS -in /backup/ca-backup.tgz.enc -out /tmp/r.tgz; tar tzf /tmp/r.tgz >/dev/null; find /ca -mindepth 1 -delete; tar xzf /tmp/r.tgz -C /ca; rm -f /tmp/r.tgz'
 	@echo "restaurado. Rode 'make up' se a stack estiver parada."
 
 reset-admin: ## Esquece a senha do admin (volta a usar ADMIN_PASS do docker/.env no proximo login)

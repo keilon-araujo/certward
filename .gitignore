@@ -13,9 +13,12 @@ ca.env
 config.json
 admin.json
 session.secret
+kek
+docker/secrets/
 
 # Estado da CA / backups / artefatos
 ca-backup*.tgz
+ca-backup*.tgz.enc
 *.bundle.zip
 capsule-ca-root.crt
 web/

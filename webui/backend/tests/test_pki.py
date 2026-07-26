@@ -112,3 +112,51 @@ def test_resolve_config_invalid(over, msg):
 def test_decode_pem_invalid():
     with pytest.raises(EngineError):
         pki.decode_pem("nao e um pem")
+
+
+# --------------------------------------------------------------- name constraints
+def test_resolve_config_name_constraints_default_on():
+    assert pki.resolve_config(_cfg())["name_constraints"] is True
+    assert pki.resolve_config(_cfg(name_constraints=False))["name_constraints"] is False
+
+
+def test_name_constraints_line():
+    on = pki._name_constraints_line({"domain": "capsule.lab.br", "name_constraints": True})
+    assert "critical" in on
+    assert "permitted;DNS:capsule.lab.br" in on
+    assert "permitted;DNS:localhost" in on          # cert TLS da propria interface
+    assert pki._name_constraints_line({"domain": "x", "name_constraints": False}) == ""
+
+
+# --------------------------------------------------------------- secrets
+def test_read_secret_precedence(tmp_path, monkeypatch):
+    # 1) sem nada -> None
+    monkeypatch.delenv("MY_SECRET", raising=False)
+    monkeypatch.delenv("MY_SECRET_FILE", raising=False)
+    assert pki.read_secret("nao_existe_xyz", "MY_SECRET") is None
+    # 2) env var
+    monkeypatch.setenv("MY_SECRET", "via-env")
+    assert pki.read_secret("nao_existe_xyz", "MY_SECRET") == "via-env"
+    # 3) *_FILE tem precedencia sobre env
+    f = tmp_path / "s.txt"
+    f.write_text("via-arquivo\n")
+    monkeypatch.setenv("MY_SECRET_FILE", str(f))
+    assert pki.read_secret("nao_existe_xyz", "MY_SECRET") == "via-arquivo"
+
+
+# --------------------------------------------------------------- cripto de chave
+def test_key_encrypt_roundtrip():
+    pki._FERNET = None                              # forca recarregar/gerar KEK local no CA_BASE de teste
+    data = b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"
+    blob = pki.encrypt_bytes(data)
+    assert blob != data
+    assert pki.decrypt_bytes(blob) == data
+
+
+def test_load_kek_rejects_invalid(monkeypatch):
+    monkeypatch.setenv("CA_KEK", "isto-nao-e-uma-chave-fernet")
+    pki._FERNET = None
+    with pytest.raises(EngineError):
+        pki.load_kek()
+    monkeypatch.delenv("CA_KEK", raising=False)
+    pki._FERNET = None

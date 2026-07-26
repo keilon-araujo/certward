@@ -10,8 +10,11 @@
 import io
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
+import tempfile
 import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -21,6 +24,22 @@ import pki
 from pki import EngineError
 
 OCSP_URL = os.environ.get("OCSP_URL", "http://ocsp:2560")   # responder interno (Docker)
+_SERIAL_RE = re.compile(r"ISSUED_SERIAL=([0-9A-Fa-f]+)")
+
+
+def _shred(p: Path):
+    """Sobrescreve e apaga um arquivo de chave em texto claro (best-effort)."""
+    try:
+        if p.exists():
+            with open(p, "r+b") as f:
+                n = os.fstat(f.fileno()).st_size
+                f.seek(0)
+                f.write(secrets.token_bytes(n))
+                f.flush()
+                os.fsync(f.fileno())
+    except OSError:
+        pass
+    p.unlink(missing_ok=True)
 
 
 @dataclass
@@ -87,12 +106,33 @@ class BashEngine(CAEngine):
             raise EngineError(404, "certificado nao encontrado")
         return pem
 
-    def _cert_key(self, serial: str, slug: str):
-        certpem = pki.INT / "newcerts" / f"{serial}.pem"
-        keyfile = pki.INT / "newcerts" / f"{serial}.key"
-        if not keyfile.exists():
-            keyfile = pki.INT / "private" / f"{slug}.key"   # fallback (certs legados por-CN)
-        return certpem, keyfile
+    def _protect_key(self, serial: str, slug: str):
+        """Cifra a chave do assinante em repouso e apaga o texto claro.
+        A chave por-serial vira newcerts/<serial>.key.enc; a chave de trabalho
+        por-CN (private/<slug>.key) e destruida."""
+        if not serial:
+            return
+        plain = pki.INT / "newcerts" / f"{serial}.key"
+        enc = pki.INT / "newcerts" / f"{serial}.key.enc"
+        if plain.exists() and not enc.exists():
+            enc.write_bytes(pki.encrypt_bytes(plain.read_bytes()))
+            os.chmod(enc, 0o400)
+            _shred(plain)
+        _shred(pki.INT / "private" / f"{slug}.key")
+
+    def _load_key(self, serial: str, slug: str) -> bytes | None:
+        """Devolve a chave do assinante em PEM (texto claro), decifrando se preciso.
+        Ordem: cifrada por-serial -> texto claro por-serial (legado) -> por-CN (legado)."""
+        enc = pki.INT / "newcerts" / f"{serial}.key.enc"
+        if enc.exists():
+            try:
+                return pki.decrypt_bytes(enc.read_bytes())
+            except Exception:
+                raise EngineError(500, "falha ao decifrar a chave (KEK incorreta?)")
+        for legacy in (pki.INT / "newcerts" / f"{serial}.key", pki.INT / "private" / f"{slug}.key"):
+            if legacy.exists():
+                return legacy.read_bytes()
+        return None
 
     # ------------------------------------------------------------------ setup
     def initialize(self, cfg: dict, passphrase: str) -> str:
@@ -161,14 +201,18 @@ class BashEngine(CAEngine):
 
     # ------------------------------------------------------------------ escrita
     def issue(self, name: str, profile: str, sans: str, p12_password: str) -> str:
+        # p12_password: ignorado (o PKCS#12 e gerado sob demanda no download com
+        # senha aleatoria de 30 caracteres). Mantido na assinatura por compat.
         if not pki.ca_present():
             raise EngineError(409, "CA nao inicializada")
         if not pki.WILDCARD_RE.match(name):
             raise EngineError(400, "nome invalido (use letras, numeros, . _ - ; wildcard: *.dominio)")
         if profile not in pki.PROFILES:
             raise EngineError(400, "perfil invalido")
-        return self._run("new_cert.sh", [name, profile, sans],
-                         extra_env={"P12_PASS": p12_password}, timeout=300)
+        log = self._run("new_cert.sh", [name, profile, sans], timeout=300)
+        m = _SERIAL_RE.search(log)
+        self._protect_key(m.group(1) if m else "", pki.fname(name))
+        return log
 
     def revoke(self, serial: str, reason: str) -> str:
         if reason not in pki.REASONS:
@@ -178,6 +222,9 @@ class BashEngine(CAEngine):
 
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
               revoke_old: bool, reason: str) -> str:
+        # Renovacao = REKEY: emite um cert novo (serial e chave novos), boa
+        # pratica de PKI. A chave do cert antigo permanece cifrada por-serial,
+        # entao o cert antigo ainda pode ser baixado ate expirar/ser revogado.
         certpem = self._cert_pem(serial)
         if profile not in pki.PROFILES:
             raise EngineError(400, "perfil invalido")
@@ -185,22 +232,18 @@ class BashEngine(CAEngine):
         slug = pki.fname(cn)
         if not pki.WILDCARD_RE.match(cn):
             raise EngineError(400, "CN do certificado antigo invalido")
-        # preserva a chave do cert antigo por-serial antes de sobrescrever os arquivos de trabalho
-        old_key = pki.INT / "newcerts" / f"{serial}.key"
-        work_key = pki.INT / "private" / f"{slug}.key"
-        if not old_key.exists() and work_key.exists():
-            shutil.copy(work_key, old_key)
-            os.chmod(old_key, 0o400)
         if revoke_old:
             if reason not in pki.REASONS:
                 raise EngineError(400, "motivo invalido")
             self._run("revoke-cert.sh", [str(certpem), reason], timeout=120)
+        # limpa os arquivos de trabalho por-CN (o novo cert usa novo serial/chave)
         for p in (pki.INT / "certs" / f"{slug}.crt", pki.INT / "certs" / f"{slug}.chain.crt",
-                  pki.INT / "certs" / f"{slug}.p12", pki.INT / "private" / f"{slug}.key",
-                  pki.INT / "reqs" / f"{slug}.csr"):
+                  pki.INT / "private" / f"{slug}.key", pki.INT / "reqs" / f"{slug}.csr"):
             p.unlink(missing_ok=True)
-        return self._run("new_cert.sh", [cn, profile, sans],
-                         extra_env={"P12_PASS": p12_password}, timeout=300)
+        log = self._run("new_cert.sh", [cn, profile, sans], timeout=300)
+        m = _SERIAL_RE.search(log)
+        self._protect_key(m.group(1) if m else "", slug)
+        return log
 
     def regenerate_crl(self) -> str:
         return self._run("gen-crl.sh", [], timeout=120)
@@ -243,36 +286,46 @@ class BashEngine(CAEngine):
             data = certpem.read_bytes() + (pki.INT / "certs" / "ca-chain.crt").read_bytes()
             return Download(filename=f"{slug}.chain.crt", content=data)
         if kind == "key":
-            _, keyfile = self._cert_key(serial, slug)
-            if not keyfile.exists():
+            keydata = self._load_key(serial, slug)
+            if keydata is None:
                 raise EngineError(404, "chave nao encontrada para este serial")
-            return Download(filename=f"{slug}.key", path=keyfile)
+            return Download(filename=f"{slug}.key", content=keydata)
         raise EngineError(400, "tipo invalido")
 
-    def _bundle(self, serial: str, slug: str, cn: str) -> Download:
-        certpem, keyfile = self._cert_key(serial, slug)
-        cachain = pki.INT / "certs" / "ca-chain.crt"
-        if not certpem.exists() or not keyfile.exists():
-            raise EngineError(404, "cert/chave nao encontrados para este serial")
-        pw = pki.random_pw(30)
-        try:
-            p = subprocess.run(
-                ["openssl", "pkcs12", "-export", "-inkey", str(keyfile), "-in", str(certpem),
-                 "-certfile", str(cachain), "-name", cn, "-passout", "env:BUNDLE_PW"],
-                capture_output=True, env={**os.environ, "BUNDLE_PW": pw}, timeout=30)
-        except subprocess.TimeoutExpired:
-            raise EngineError(504, "timeout ao gerar o PKCS#12")
+    def _make_p12(self, certpem: Path, keydata: bytes, cachain: Path, cn: str, pw: str) -> bytes:
+        """Gera um PKCS#12 escrevendo a chave decifrada num arquivo temporario
+        efemero (fora do volume), destruido ao fim."""
+        with tempfile.NamedTemporaryFile("wb", suffix=".key", delete=True) as tf:
+            tf.write(keydata)
+            tf.flush()
+            try:
+                p = subprocess.run(
+                    ["openssl", "pkcs12", "-export", "-inkey", tf.name, "-in", str(certpem),
+                     "-certfile", str(cachain), "-name", cn, "-passout", "env:BUNDLE_PW"],
+                    capture_output=True, env={**os.environ, "BUNDLE_PW": pw}, timeout=30)
+            except subprocess.TimeoutExpired:
+                raise EngineError(504, "timeout ao gerar o PKCS#12")
         if p.returncode != 0:
             raise EngineError(500, "falha ao gerar o PKCS#12: " + p.stderr.decode(errors="ignore")[:200])
+        return p.stdout
+
+    def _bundle(self, serial: str, slug: str, cn: str) -> Download:
+        certpem = self._cert_pem(serial)
+        keydata = self._load_key(serial, slug)
+        cachain = pki.INT / "certs" / "ca-chain.crt"
+        if keydata is None or not cachain.exists():
+            raise EngineError(404, "cert/chave nao encontrados para este serial")
+        pw = pki.random_pw(30)
+        p12 = self._make_p12(certpem, keydata, cachain, cn, pw)
         dec = pki.decode_cert(pki.load_cert(certpem))
         sans = next((e["value"] for e in dec["extensions"] if e["name"] == "subjectAltName"), [])
         chain_bytes = certpem.read_bytes() + cachain.read_bytes()
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr(f"{slug}.crt", certpem.read_bytes())
-            z.writestr(f"{slug}.key", keyfile.read_bytes())
+            z.writestr(f"{slug}.key", keydata)
             z.writestr(f"{slug}.chain.crt", chain_bytes)
-            z.writestr(f"{slug}.p12", p.stdout)
+            z.writestr(f"{slug}.p12", p12)
             z.writestr("PASS.txt", pw + "\n")
             z.writestr("LEIAME.txt", _bundle_readme(slug, cn, dec, sans))
         return Download(filename=f"{slug}.bundle.zip", media_type="application/zip",
