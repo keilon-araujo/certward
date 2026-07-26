@@ -191,6 +191,7 @@ class IssueBody(BaseModel):
     profile: str = "server"
     sans: str = ""
     p12_password: str = ""
+    key_type: str = "ecdsa-p256"
 
 
 class RevokeBody(BaseModel):
@@ -203,6 +204,7 @@ class RenewBody(BaseModel):
     p12_password: str = ""
     revoke_old: bool = True
     reason: str = "superseded"
+    key_type: str = "ecdsa-p256"
 
 
 class DecodeBody(BaseModel):
@@ -329,8 +331,8 @@ def decode_pem(body: DecodeBody, _: str = Depends(auth)):
 
 @app.post("/api/certs")
 def issue(body: IssueBody, user: str = Depends(auth)):
-    log = engine.issue(body.name, body.profile, body.sans, body.p12_password)
-    audit(user, "emitir", f"{body.name} ({body.profile})")
+    log = engine.issue(body.name, body.profile, body.sans, body.p12_password, body.key_type)
+    audit(user, "emitir", f"{body.name} ({body.profile}, {body.key_type})")
     return {"ok": True, "log": log}
 
 
@@ -343,8 +345,9 @@ def revoke(serial: str, body: RevokeBody, user: str = Depends(auth)):
 
 @app.post("/api/certs/{serial}/renew")
 def renew(serial: str, body: RenewBody, user: str = Depends(auth)):
-    log = engine.renew(serial, body.profile, body.sans, body.p12_password, body.revoke_old, body.reason)
-    audit(user, "renovar", f"serial {serial} (revogou_antigo={body.revoke_old})")
+    log = engine.renew(serial, body.profile, body.sans, body.p12_password,
+                       body.revoke_old, body.reason, body.key_type)
+    audit(user, "renovar", f"serial {serial} (revogou_antigo={body.revoke_old}, {body.key_type})")
     return {"ok": True, "log": log}
 
 

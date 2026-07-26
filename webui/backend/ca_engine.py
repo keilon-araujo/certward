@@ -61,10 +61,11 @@ class CAEngine(ABC):
     @abstractmethod
     def cert_detail(self, serial: str) -> dict: ...
     @abstractmethod
-    def issue(self, name: str, profile: str, sans: str, p12_password: str) -> str: ...
+    def issue(self, name: str, profile: str, sans: str, p12_password: str,
+              key_type: str = "ecdsa-p256") -> str: ...
     @abstractmethod
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
-              revoke_old: bool, reason: str) -> str: ...
+              revoke_old: bool, reason: str, key_type: str = "ecdsa-p256") -> str: ...
     @abstractmethod
     def revoke(self, serial: str, reason: str) -> str: ...
     @abstractmethod
@@ -218,7 +219,8 @@ class BashEngine(CAEngine):
         }
 
     # ------------------------------------------------------------------ escrita
-    def issue(self, name: str, profile: str, sans: str, p12_password: str) -> str:
+    def issue(self, name: str, profile: str, sans: str, p12_password: str,
+              key_type: str = "ecdsa-p256") -> str:
         # p12_password: senha do PKCS#12 escolhida na emissao (a UI sugere 30
         # chars aleatorios; o usuario pode editar). Guardada cifrada e usada no
         # bundle. Se vazia, o download gera uma aleatoria.
@@ -228,7 +230,9 @@ class BashEngine(CAEngine):
             raise EngineError(400, "nome invalido (use letras, numeros, . _ - ; wildcard: *.dominio)")
         if profile not in pki.PROFILES:
             raise EngineError(400, "perfil invalido")
-        log = self._run("new_cert.sh", [name, profile, sans], timeout=300)
+        if key_type not in pki.KEY_TYPES:
+            raise EngineError(400, "tipo de chave invalido")
+        log = self._run("new_cert.sh", [name, profile, sans, key_type], timeout=300)
         m = _SERIAL_RE.search(log)
         serial = m.group(1) if m else ""
         self._protect_key(serial, pki.fname(name))
@@ -242,13 +246,15 @@ class BashEngine(CAEngine):
         return self._run("revoke-cert.sh", [str(pem), reason], timeout=120)
 
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
-              revoke_old: bool, reason: str) -> str:
+              revoke_old: bool, reason: str, key_type: str = "ecdsa-p256") -> str:
         # Renovacao = REKEY: emite um cert novo (serial e chave novos), boa
         # pratica de PKI. A chave do cert antigo permanece cifrada por-serial,
         # entao o cert antigo ainda pode ser baixado ate expirar/ser revogado.
         certpem = self._cert_pem(serial)
         if profile not in pki.PROFILES:
             raise EngineError(400, "perfil invalido")
+        if key_type not in pki.KEY_TYPES:
+            raise EngineError(400, "tipo de chave invalido")
         cn = pki.common_name(pki.load_cert(certpem))
         slug = pki.fname(cn)
         if not pki.WILDCARD_RE.match(cn):
@@ -261,7 +267,7 @@ class BashEngine(CAEngine):
         for p in (pki.INT / "certs" / f"{slug}.crt", pki.INT / "certs" / f"{slug}.chain.crt",
                   pki.INT / "private" / f"{slug}.key", pki.INT / "reqs" / f"{slug}.csr"):
             p.unlink(missing_ok=True)
-        log = self._run("new_cert.sh", [cn, profile, sans], timeout=300)
+        log = self._run("new_cert.sh", [cn, profile, sans, key_type], timeout=300)
         m = _SERIAL_RE.search(log)
         newserial = m.group(1) if m else ""
         self._protect_key(newserial, slug)

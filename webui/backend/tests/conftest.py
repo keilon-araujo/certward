@@ -45,12 +45,12 @@ class FakeEngine(CAEngine):
             raise EngineError(404, "certificado nao encontrado")
         return {"serial": "1000", "cn": "a.test.lab", "decoded": {"version": "v3"}, "pem": "PEM"}
 
-    def issue(self, name, profile, sans, p12_password):
-        self.calls.append(("issue", name, profile))
+    def issue(self, name, profile, sans, p12_password, key_type="ecdsa-p256"):
+        self.calls.append(("issue", name, profile, key_type))
         return "[issue] ok"
 
-    def renew(self, serial, profile, sans, p12_password, revoke_old, reason):
-        self.calls.append(("renew", serial, revoke_old))
+    def renew(self, serial, profile, sans, p12_password, revoke_old, reason, key_type="ecdsa-p256"):
+        self.calls.append(("renew", serial, revoke_old, key_type))
         return "[renew] ok"
 
     def revoke(self, serial, reason):

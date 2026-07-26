@@ -58,6 +58,15 @@ REASONS = {
 }
 DIGESTS = {"sha256", "sha384", "sha512"}
 KEY_SIZES = {2048, 3072, 4096}
+# Tipos de chave oferecidos na emissao de folhas (ECDSA por padrao; RSA p/ legado).
+KEY_TYPES = {
+    "ecdsa-p256": "ECDSA P-256",
+    "ecdsa-p384": "ECDSA P-384",
+    "rsa-2048": "RSA 2048",
+    "rsa-3072": "RSA 3072",
+    "rsa-4096": "RSA 4096",
+}
+DEFAULT_KEY_TYPE = "ecdsa-p256"
 
 
 class EngineError(Exception):
@@ -181,6 +190,17 @@ def profile_of(cert) -> str:
 
 def fingerprint(cert) -> str:
     return cert.fingerprint(hashes.SHA256()).hex(":").upper()
+
+
+def key_type_of(cert) -> str:
+    """Mapeia a chave publica do cert para um id de KEY_TYPES (p/ default da renovacao)."""
+    pk = cert.public_key()
+    if isinstance(pk, ec.EllipticCurvePublicKey):
+        return {"secp256r1": "ecdsa-p256", "secp384r1": "ecdsa-p384"}.get(pk.curve.name, "ecdsa-p256")
+    if isinstance(pk, rsa.RSAPublicKey):
+        cand = f"rsa-{pk.key_size}"
+        return cand if cand in KEY_TYPES else "rsa-2048"
+    return ""
 
 
 def _oidn(oid) -> str:
@@ -337,7 +357,7 @@ def parse_index():
             "not_after": _parse_asn1_time(exp).isoformat() if exp else None,
             "revoked_at": None, "revoke_reason": None,
             "cn": subject.split("CN=")[-1].split("/")[0] if "CN=" in subject else "",
-            "profile": "?", "sans": [], "days_left": None,
+            "profile": "?", "sans": [], "days_left": None, "key_type": "",
         }
         if st == "R" and rev:
             parts = rev.split(",")
@@ -353,6 +373,7 @@ def parse_index():
                 entry["cn"] = common_name(c) or entry["cn"]
                 entry["profile"] = profile_of(c)
                 entry["sans"] = san_list(c)
+                entry["key_type"] = key_type_of(c)
             except Exception:
                 pass
         rows.append(entry)
