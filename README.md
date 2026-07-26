@@ -65,9 +65,10 @@ make restore BACKUP_PASS=<senha>           # restaura ./ca-backup.tgz.enc (valid
 make reset-admin                           # recuperar senha do admin
 ```
 
-O grosso, porém, é feito pela **UI**: emitir (server/client/dual, wildcard com
-apex automático), **renovar** (revogando o antigo ou mantendo os dois; a
-renovação faz **rekey**), revogar, regenerar CRL, **consultar OCSP ao vivo**,
+O grosso, porém, é feito pela **UI**: emitir (server/client/dual, **ECDSA por
+padrão ou RSA para legado**, wildcard com apex automático), **renovar**
+(revogando o antigo ou mantendo os dois; a renovação faz **rekey**, podendo
+trocar o tipo de chave), revogar, regenerar CRL, **consultar OCSP ao vivo**,
 decodificar um PEM colado, e baixar `cert` / `chain` / `key` ou um **pacote
 `.zip`** (crt+key+chain+p12+senha aleatória).
 

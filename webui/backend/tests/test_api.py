@@ -29,14 +29,20 @@ def test_cert_detail_ok_and_404(client):
 def test_issue_calls_engine_and_audits(client):
     r = client.post("/api/certs", json={"name": "x.test.lab", "profile": "server", "sans": ""})
     assert r.status_code == 200 and r.json()["ok"] is True
-    assert ("issue", "x.test.lab", "server") in client.fake.calls
+    assert ("issue", "x.test.lab", "server", "ecdsa-p256") in client.fake.calls   # default ECDSA
+
+
+def test_issue_key_type_passthrough(client):
+    r = client.post("/api/certs", json={"name": "r.test.lab", "profile": "server", "key_type": "rsa-4096"})
+    assert r.status_code == 200
+    assert ("issue", "r.test.lab", "server", "rsa-4096") in client.fake.calls
 
 
 def test_revoke_and_renew(client):
     assert client.post("/api/certs/1000/revoke", json={"reason": "superseded"}).status_code == 200
     assert ("revoke", "1000", "superseded") in client.fake.calls
     assert client.post("/api/certs/1000/renew", json={"profile": "server", "revoke_old": False}).status_code == 200
-    assert ("renew", "1000", False) in client.fake.calls
+    assert ("renew", "1000", False, "ecdsa-p256") in client.fake.calls
 
 
 def test_ocsp(client):

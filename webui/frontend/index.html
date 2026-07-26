@@ -479,6 +479,7 @@ const S = {
   busy: {},            // { crl:true, setup:true, issue:true, revoke:"1001" }
   initLog: null,
   issueP12: null,      // senha do PKCS#12 sugerida (30 chars aleatorios, editavel)
+  issueKeyType: "ecdsa-p256",   // tipo de chave escolhido na emissao
   issueResult: null,   // { cn, serial, log }
   detail: null,        // { serial, data, loading, error }
   wizard: { data: null, error: null },
@@ -831,6 +832,15 @@ const PROFILES = [
   { id: "client", t: "client", d: "TLS client auth — clientes mTLS, jobs e agentes." },
   { id: "dual", t: "dual", d: "server + client — serviços que atuam nas duas pontas." },
 ];
+const KEY_TYPES = [
+  { id: "ecdsa-p256", t: "ECDSA P-256 (padrão)" },
+  { id: "ecdsa-p384", t: "ECDSA P-384" },
+  { id: "rsa-2048", t: "RSA 2048 (legado)" },
+  { id: "rsa-3072", t: "RSA 3072 (legado)" },
+  { id: "rsa-4096", t: "RSA 4096 (legado)" },
+];
+const keyTypeOptions = (sel) => KEY_TYPES.map((k) =>
+  '<option value="' + k.id + '"' + (k.id === sel ? " selected" : "") + ">" + k.t + "</option>").join("");
 function viewIssue() {
   if (S.status && !S.status.initialized) return notInitEmpty("Emitir depende da intermediária. Inicialize a CA primeiro.");
   const busy = !!S.busy.issue;
@@ -846,6 +856,9 @@ function viewIssue() {
     + PROFILES.map((p, i) => '<label class="radio"><input type="radio" name="profile" value="' + p.id + '"'
       + (i === 0 ? " checked" : "") + (busy ? " disabled" : "") + "><span><b>" + p.t + "</b><small>" + p.d + "</small></span></label>").join("")
     + "</div></fieldset>"
+    + '<div class="field"><label for="f-keytype">Tipo de chave</label>'
+    + '<select id="f-keytype" class="mono"' + (busy ? " disabled" : "") + ">" + keyTypeOptions(S.issueKeyType) + "</select>"
+    + '<div class="hint"><b>ECDSA</b> por padrão; use <b>RSA</b> para servidores legados que não suportam curvas elípticas.</div></div>'
     + '<div class="field"><label for="f-sans">SANs <span class="hint">(opcional)</span></label>'
     + '<input id="f-sans" class="mono" type="text" placeholder="DNS:app1.capsule.lab.br,IP:10.0.0.10" autocomplete="off" spellcheck="false"' + (busy ? " disabled" : "") + ">"
     + '<div class="hint">Lista separada por vírgula com prefixo de tipo: <code>DNS:</code>, <code>IP:</code>, <code>email:</code>. Em wildcard, o domínio nu (apex) é incluído automaticamente.</div>'
@@ -1220,6 +1233,7 @@ async function submitIssue(form) {
   const name = $("#f-name").value.trim();
   const sans = $("#f-sans").value.trim();
   const p12 = $("#f-p12").value;
+  const keyType = ($("#f-keytype") || {}).value || "ecdsa-p256";
   const profile = (form.querySelector('input[name=profile]:checked') || {}).value || "server";
   const eName = $("#e-name"), eSans = $("#e-sans");
   eName.hidden = true; eSans.hidden = true;
@@ -1237,7 +1251,7 @@ async function submitIssue(form) {
   }
   S.busy.issue = true; S.issueResult = null; render();
   try {
-    const res = await api("/api/certs", { method: "POST", body: { name, profile, sans, p12_password: p12 } });
+    const res = await api("/api/certs", { method: "POST", body: { name, profile, sans, p12_password: p12, key_type: keyType } });
     S.busy.issue = false;
     await loadCerts();
     const match = S.certs.filter((c) => c.cn === name).sort((a, b) => (parseInt(b.serial, 16) || 0) - (parseInt(a.serial, 16) || 0))[0];
@@ -1473,6 +1487,8 @@ function renewModal() {
       + (r.profile === p.id ? " checked" : "") + dis + "><span><b>" + p.t + "</b><small>" + p.d + "</small></span></label>").join("")
     + "</div></fieldset>"
     + '<div class="field"><label for="rn-sans">SANs</label><input id="rn-sans" class="mono" value="' + esc(r.sans || "") + '"' + dis + "></div>"
+    + '<div class="field"><label for="rn-keytype">Tipo de chave <span class="hint">(renovação faz rekey)</span></label>'
+    + '<select id="rn-keytype" class="mono"' + dis + ">" + keyTypeOptions(r.keyType || "ecdsa-p256") + "</select></div>"
     + '<div class="field"><label for="rn-p12">Senha do PKCS#12 <span class="hint">(sugerida — edite se quiser)</span></label>'
     + '<div style="display:flex;gap:8px;align-items:stretch">'
     + '<input id="rn-p12" class="mono" type="text" value="' + esc(r.p12 || "") + '" autocomplete="off" spellcheck="false"' + dis + ' style="flex:1">'
@@ -1491,11 +1507,12 @@ async function doRenew() {
   const profile = (box.querySelector("input[name=rn-profile]:checked") || {}).value || "server";
   const sans = ($("#rn-sans").value || "").trim();
   const p12 = $("#rn-p12").value || "";
+  const keyType = ($("#rn-keytype") || {}).value || "ecdsa-p256";
   const revokeOld = !!($("#rn-revoke") && $("#rn-revoke").checked);
   S.busy.renew = true; S.renewError = null; renderLayer();
   try {
     await api("/api/certs/" + encodeURIComponent(r.serial) + "/renew",
-      { method: "POST", body: { profile, sans, p12_password: p12, revoke_old: revokeOld, reason: "superseded" } });
+      { method: "POST", body: { profile, sans, p12_password: p12, revoke_old: revokeOld, reason: "superseded", key_type: keyType } });
     S.busy.renew = false; S.renew = null; closeLayer();
     toast("ok", "Certificado renovado", r.cn + (revokeOld ? " · antigo revogado" : " · antigo mantido"));
     await refreshAll();
@@ -1572,7 +1589,7 @@ document.addEventListener("click", (ev) => {
     const serial = rn.dataset.renew;
     const c = S.certs.find((x) => String(x.serial) === serial) || (S.detail && S.detail.data) || {};
     const sans = Array.isArray(c.sans) ? c.sans.join(",") : "";
-    S.renew = { serial, cn: c.cn, profile: (c.profile === "server" || c.profile === "client" || c.profile === "dual") ? c.profile : "server", sans, p12: randomPw(30) };
+    S.renew = { serial, cn: c.cn, profile: (c.profile === "server" || c.profile === "client" || c.profile === "dual") ? c.profile : "server", sans, p12: randomPw(30), keyType: c.key_type || "ecdsa-p256" };
     S.renewError = null; renderLayer();
     return;
   }
@@ -1640,7 +1657,10 @@ document.addEventListener("change", (ev) => {
   if (wz) {
     if (!S.wizard.data) S.wizard.data = Object.assign({}, WIZ_DEFAULTS);
     S.wizard.data[wz.dataset.wz] = ev.target.value;
+    return;
   }
+  if (ev.target.id === "f-keytype") { S.issueKeyType = ev.target.value; return; }
+  if (ev.target.id === "rn-keytype") { if (S.renew) S.renew.keyType = ev.target.value; return; }
 });
 document.addEventListener("submit", (ev) => {
   if (ev.target.id === "issueform") { ev.preventDefault(); submitIssue(ev.target); }
