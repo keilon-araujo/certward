@@ -1,0 +1,66 @@
+# Capsule Corp CA - stack de laboratorio
+# Suba com:  docker compose up -d --build   (a partir de configs-ca/docker/)
+# Depois abra http://<host>/ (vhost admin) e inicialize a CA pela aba "CA / Init".
+
+services:
+  webui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: capsule-ca:latest
+    env_file: .env                 # ADMIN_USER / ADMIN_PASS
+    environment:
+      CA_BASE: /ca
+      CONF: /ca/openssl.cnf          # openssl.cnf RENDERIZADO pelo setup (nao o estatico)
+      SCRIPTS_DIR: /opt/ca-app
+      OCSP_URL: http://ocsp:2560      # responder interno (consulta OCSP ao vivo)
+    volumes:
+      - ca-data:/ca
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 8s
+    restart: unless-stopped
+    # comando padrao (uvicorn) vem do Dockerfile
+
+  ocsp:
+    image: capsule-ca:latest
+    depends_on: [webui]
+    environment:
+      CA_BASE: /ca
+    volumes:
+      - ca-data:/ca
+    command: ["/opt/ca-app/docker/entrypoint-ocsp.sh"]
+    restart: unless-stopped
+
+  crl:
+    image: capsule-ca:latest
+    depends_on: [webui]
+    environment:
+      CA_BASE: /ca
+    volumes:
+      - ca-data:/ca
+    command: ["/opt/ca-app/docker/entrypoint-crl.sh"]
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.nginx
+    image: capsule-nginx:latest
+    depends_on:
+      webui:
+        condition: service_healthy
+      ocsp:
+        condition: service_started
+    ports:
+      - "80:80"                     # ca. / ocsp. (http) e redirect do admin
+      - "443:443"                   # admin. (https, cert da CA)
+    volumes:
+      - ca-data:/ca:ro              # /ca/web (artefatos) e /ca/tls (cert admin)
+    restart: unless-stopped
+
+volumes:
+  ca-data:

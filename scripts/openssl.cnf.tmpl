@@ -1,0 +1,160 @@
+# ============================================================================
+# TEMPLATE do openssl.cnf - renderizado pelo backend a partir de /ca/config.json
+# durante o assistente de configuracao (setup). Os campos entre chaves duplas
+# sao substituidos. Nao edite /ca/openssl.cnf a mao: ele e gerado a partir daqui.
+# ============================================================================
+
+[ ca ]
+default_ca = CA_intermediate
+
+# ------------------------------- ROOT CA ------------------------------------
+[ CA_root ]
+dir               = /ca/root
+certs             = $dir/certs
+crl_dir           = $dir/crl
+new_certs_dir     = $dir/newcerts
+database          = $dir/index.txt
+serial            = $dir/serial
+RANDFILE          = $dir/private/.rand
+private_key       = $dir/private/ca.key
+certificate       = $dir/certs/ca.crt
+crlnumber         = $dir/crlnumber
+crl               = $dir/crl/root.crl
+crl_extensions    = crl_ext
+default_crl_days  = {{CRL_DAYS_ROOT}}
+default_md        = {{DIGEST}}
+name_opt          = ca_default
+cert_opt          = ca_default
+default_days      = {{ROOT_DAYS}}
+preserve          = no
+policy            = policy_strict
+
+# --------------------------- INTERMEDIATE CA --------------------------------
+[ CA_intermediate ]
+dir               = /ca/intermediate
+certs             = $dir/certs
+crl_dir           = $dir/crl
+new_certs_dir     = $dir/newcerts
+database          = $dir/index.txt
+serial            = $dir/serial
+RANDFILE          = $dir/private/.rand
+private_key       = $dir/private/intermediate.key
+certificate       = $dir/certs/intermediate.crt
+crlnumber         = $dir/crlnumber
+crl               = $dir/crl/intermediate.crl
+crl_extensions    = crl_ext
+default_crl_days  = {{CRL_DAYS}}
+default_md        = {{DIGEST}}
+name_opt          = ca_default
+cert_opt          = ca_default
+default_days      = {{LEAF_DAYS}}
+preserve          = no
+policy            = policy_loose
+
+# ------------------------------- policies -----------------------------------
+[ policy_strict ]
+countryName            = match
+stateOrProvinceName    = optional
+organizationName       = match
+organizationalUnitName = optional
+commonName             = supplied
+emailAddress           = optional
+
+[ policy_loose ]
+countryName            = optional
+stateOrProvinceName    = optional
+localityName           = optional
+organizationName       = optional
+organizationalUnitName = optional
+commonName             = supplied
+emailAddress           = optional
+
+# --------------------------------- req --------------------------------------
+[ req ]
+default_bits       = {{KEY_SIZE}}
+distinguished_name = req_distinguished_name
+string_mask        = utf8only
+default_md         = {{DIGEST}}
+x509_extensions    = v3_ca
+prompt             = no
+
+[ req_distinguished_name ]
+countryName                     = Country Name (2 letter code)
+countryName_default             = {{COUNTRY}}
+stateOrProvinceName             = State or Province Name (full name)
+stateOrProvinceName_default     = {{STATE}}
+localityName                    = Locality Name (eg, city)
+localityName_default            = {{LOCALITY}}
+organizationName                = Organization Name (eg, company)
+organizationName_default        = {{ORG}}
+organizationalUnitName          = Organizational Unit Name (eg, section)
+organizationalUnitName_default  = {{OU}}
+commonName                      = Common Name
+commonName_default              = {{ROOT_CN}}
+emailAddress                    = Email Address
+
+# ------------------------------ extensions ----------------------------------
+[ v3_ca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints       = critical, CA:true
+keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
+
+[ v3_intermediate_ca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints       = critical, CA:true, pathlen:0
+keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
+authorityInfoAccess    = @issuer_info_int
+crlDistributionPoints  = @crl_info_int
+
+[ server_cert ]
+basicConstraints       = critical, CA:false
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage               = critical, digitalSignature, keyEncipherment
+extendedKeyUsage       = critical, serverAuth
+authorityInfoAccess    = @issuer_info_leaf
+crlDistributionPoints  = @crl_info_leaf
+
+[ client_cert ]
+basicConstraints       = critical, CA:false
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = critical, clientAuth
+authorityInfoAccess    = @issuer_info_leaf
+crlDistributionPoints  = @crl_info_leaf
+
+[ dual_cert ]
+basicConstraints       = critical, CA:false
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage               = critical, digitalSignature, keyEncipherment
+extendedKeyUsage       = critical, serverAuth, clientAuth
+authorityInfoAccess    = @issuer_info_leaf
+crlDistributionPoints  = @crl_info_leaf
+
+[ ocsp ]
+basicConstraints       = critical, CA:false
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = critical, OCSPSigning
+
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always,issuer
+
+# ------------------------- AIA / CRL distribution ---------------------------
+[ issuer_info_leaf ]
+caIssuers;URI.0 = http://{{CA_HOST}}/intermediate.crt
+OCSP;URI.0      = http://{{OCSP_HOST}}
+
+[ crl_info_leaf ]
+URI.0 = http://{{CA_HOST}}/ca.crl
+
+[ issuer_info_int ]
+caIssuers;URI.0 = http://{{CA_HOST}}/ca.crt
+
+[ crl_info_int ]
+URI.0 = http://{{CA_HOST}}/root.crl

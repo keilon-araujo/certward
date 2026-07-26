@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Segredos / ambiente (NUNCA versionar)
+docker/.env
+*.key
+*.p12
+ca.env
+config.json
+admin.json
+
+# Estado da CA / backups / artefatos
+ca-backup*.tgz
+*.bundle.zip
+capsule-ca-root.crt
+web/
+tls/
+root/
+intermediate/
+
+# Build de PDF (docs)
+docs/_build.html
+
+# macOS
+.DS_Store

@@ -1,0 +1,18 @@
+# nginx da Capsule Corp: traz openssl (cert temporario), a config e o entrypoint
+FROM nginx:alpine
+
+RUN apk add --no-cache openssl bash
+
+# Cert TEMPORARIO auto-assinado para o 443 subir ANTES da CA existir.
+# O entrypoint o substitui pelo cert emitido pela CA (/ca/tls/admin.*) e recarrega.
+RUN mkdir -p /etc/nginx/tls \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -subj "/CN=ca-admin-setup-pending" \
+        -keyout /etc/nginx/tls/admin.key -out /etc/nginx/tls/admin.crt \
+    && chmod 400 /etc/nginx/tls/admin.key
+
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx-entrypoint.sh /nginx-entrypoint.sh
+RUN chmod +x /nginx-entrypoint.sh
+
+ENTRYPOINT ["/nginx-entrypoint.sh"]
