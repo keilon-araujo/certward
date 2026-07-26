@@ -12,6 +12,7 @@
 # Config por ambiente: CA_BASE, SCRIPTS_DIR, ADMIN_USER, ADMIN_PASS, OCSP_URL.
 # Rodar:  uvicorn app:app --host 0.0.0.0 --port 8080
 # ============================================================================
+import base64
 import hashlib
 import hmac
 import json
@@ -37,15 +38,15 @@ if not ADMIN_PASS:
     ADMIN_PASS = secrets.token_urlsafe(12)
     print(f"[webui] ADMIN_PASS nao definido. Senha temporaria: {ADMIN_PASS}")
 
-# ---- sessao / rate-limit --------------------------------------------------
+# ---- sessao (token assinado, stateless) / rate-limit ----------------------
 COOKIE = "ca_session"
 SESSION_TTL = 8 * 3600                      # 8h
-SESSIONS: dict = {}                        # token -> {"user":.., "exp":..}
-LOGIN_FAILS: dict = {}                     # ip -> {"count":.., "until":..}
+SESSION_SECRET_PATH = pki.CA_BASE / "session.secret"   # segredo HMAC persistido no volume
+LOGIN_FAILS: dict = {}                     # ip -> {"count":.., "ts":.., "until":..} (best-effort, por processo)
 FAIL_MAX = 5
 FAIL_LOCK = 300                            # 5 min de bloqueio apos FAIL_MAX
 
-app = FastAPI(title="Capsule Corp CA")
+app = FastAPI(title="certward")
 engine = get_engine()
 
 
@@ -74,7 +75,7 @@ def ensure_admin() -> dict:
         except Exception:
             pass
     pki.CA_BASE.mkdir(parents=True, exist_ok=True)
-    rec = {"username": ADMIN_USER, **_hash_pw(ADMIN_PASS)}
+    rec = {"username": ADMIN_USER, "pv": 0, **_hash_pw(ADMIN_PASS)}
     pki.ADMIN_STORE.write_text(json.dumps(rec, indent=2))
     return rec
 
@@ -93,21 +94,64 @@ def audit(user: str, action: str, detail: str = ""):
         pass
 
 
+def _session_secret() -> bytes:
+    """Segredo de assinatura dos tokens, persistido no volume (sobrevive a
+    restart e e compartilhado entre workers/replicas, ao contrario de um dict
+    em memoria)."""
+    if SESSION_SECRET_PATH.exists():
+        return SESSION_SECRET_PATH.read_bytes()
+    pki.CA_BASE.mkdir(parents=True, exist_ok=True)
+    sec = secrets.token_bytes(32)
+    SESSION_SECRET_PATH.write_bytes(sec)
+    try:
+        os.chmod(SESSION_SECRET_PATH, 0o600)
+    except OSError:
+        pass
+    return sec
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _pw_version() -> int:
+    try:
+        return int(ensure_admin().get("pv", 0))
+    except Exception:
+        return 0
+
+
 def _new_session(user: str) -> str:
-    tok = secrets.token_urlsafe(32)
-    SESSIONS[tok] = {"user": user, "exp": time.time() + SESSION_TTL}
-    return tok
+    """Token stateless: base64(payload).base64(HMAC-SHA256(payload)).
+    Sem estado no servidor — a validade e a integridade viajam no proprio token."""
+    payload = {"u": user, "exp": int(time.time() + SESSION_TTL), "pv": _pw_version()}
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64(hmac.new(_session_secret(), body.encode(), hashlib.sha256).digest())
+    return f"{body}.{sig}"
 
 
 def auth(request: Request) -> str:
-    """Dependencia: exige sessao valida (cookie). Retorna o usuario."""
-    tok = request.cookies.get(COOKIE)
-    s = SESSIONS.get(tok) if tok else None
-    if not s or s["exp"] < time.time():
-        if tok:
-            SESSIONS.pop(tok, None)
+    """Dependencia: exige um token de sessao valido (cookie). Retorna o usuario."""
+    tok = request.cookies.get(COOKIE) or ""
+    try:
+        body, sig = tok.split(".")
+        expected = _b64(hmac.new(_session_secret(), body.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, expected):
+            raise ValueError
+        payload = json.loads(_b64d(body))
+        if payload["exp"] < time.time():
+            raise ValueError
+        if int(payload.get("pv", -1)) != _pw_version():   # troca de senha invalida tokens antigos
+            raise ValueError
+        return payload["u"]
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(401, "sessao invalida ou expirada")
-    return s["user"]
 
 
 def _respond(d: Download):
@@ -215,8 +259,8 @@ def login(body: LoginBody, request: Request, response: Response):
 
 
 @app.post("/api/logout")
-def logout(request: Request, response: Response, user: str = Depends(auth)):
-    SESSIONS.pop(request.cookies.get(COOKIE), None)
+def logout(response: Response, user: str = Depends(auth)):
+    # token stateless: basta apagar o cookie no cliente
     response.delete_cookie(COOKIE, path="/")
     audit(user, "logout", "")
     return {"ok": True}
@@ -227,8 +271,9 @@ def change_password(body: PwBody, user: str = Depends(auth)):
     rec = ensure_admin()
     if not _verify_pw(body.current, rec):
         raise HTTPException(400, "senha atual incorreta")
-    pki.ADMIN_STORE.write_text(json.dumps({"username": rec["username"], **_hash_pw(body.new)}, indent=2))
-    SESSIONS.clear()   # derruba todas as sessoes por seguranca
+    new_pv = int(rec.get("pv", 0)) + 1     # bump de versao invalida todos os tokens antigos
+    pki.ADMIN_STORE.write_text(json.dumps(
+        {"username": rec["username"], "pv": new_pv, **_hash_pw(body.new)}, indent=2))
     audit(user, "change-password", "")
     return {"ok": True}
 

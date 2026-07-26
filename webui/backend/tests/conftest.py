@@ -86,7 +86,6 @@ def client(fake_engine):
     prev = app_module.engine
     app_module.engine = fake_engine
     app_module.app.dependency_overrides[app_module.auth] = lambda: "tester"
-    app_module.SESSIONS.clear()
     app_module.LOGIN_FAILS.clear()
     c = TestClient(app_module.app, base_url="https://testserver")
     c.fake = fake_engine
@@ -97,11 +96,14 @@ def client(fake_engine):
 
 @pytest.fixture
 def raw_client(fake_engine):
-    """Client SEM override de auth — para testar login/sessao de verdade."""
+    """Client SEM override de auth — para testar login/sessao de verdade.
+    Isola cada teste: admin.json e session.secret sao recriados do zero."""
+    import pki as _pki
     prev = app_module.engine
     app_module.engine = fake_engine
-    app_module.SESSIONS.clear()
     app_module.LOGIN_FAILS.clear()
+    _pki.ADMIN_STORE.unlink(missing_ok=True)             # admin bootstrapa do env (pv=0)
+    app_module.SESSION_SECRET_PATH.unlink(missing_ok=True)
     c = TestClient(app_module.app, base_url="https://testserver")
     yield c
     app_module.engine = prev

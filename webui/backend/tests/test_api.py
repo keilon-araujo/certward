@@ -85,3 +85,18 @@ def test_rate_limit(raw_client):
         raw_client.post("/api/login", json={"username": "admin", "password": "x"})
     # apos FAIL_MAX, bloqueia com 429
     assert raw_client.post("/api/login", json={"username": "admin", "password": "x"}).status_code == 429
+
+
+def test_change_password_invalidates_old_tokens(raw_client):
+    raw_client.post("/api/login", json={"username": "admin", "password": "senha-de-teste-1"})
+    assert raw_client.get("/api/me").status_code == 200
+    r = raw_client.post("/api/change-password",
+                        json={"current": "senha-de-teste-1", "new": "nova-senha-forte-2"})
+    assert r.status_code == 200
+    # bump de pv invalida o token atual (stateless): 401 sem novo login
+    assert raw_client.get("/api/me").status_code == 401
+    # senha antiga nao loga mais; a nova sim
+    assert raw_client.post("/api/login",
+                           json={"username": "admin", "password": "senha-de-teste-1"}).status_code == 401
+    assert raw_client.post("/api/login",
+                           json={"username": "admin", "password": "nova-senha-forte-2"}).status_code == 200

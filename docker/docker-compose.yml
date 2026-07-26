@@ -1,13 +1,16 @@
-# Capsule Corp CA - stack de laboratorio
+# certward - stack da CA
 # Suba com:  docker compose up -d --build   (a partir da pasta docker/)
-# Depois abra http://<host>/ (vhost admin) e inicialize a CA pela aba "CA / Init".
+# Depois abra https://<host>/ e conclua o assistente de primeiro login.
+#
+# Os containers webui/ocsp/crl rodam como usuario NAO-root 'app' (via
+# user-entrypoint.sh, que ajusta o dono do volume e dropa privilegios).
 
 services:
   webui:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: capsule-ca:latest
+    image: certward:latest
     env_file: .env                 # ADMIN_USER / ADMIN_PASS
     environment:
       CA_BASE: /ca
@@ -22,34 +25,49 @@ services:
       timeout: 3s
       retries: 6
       start_period: 8s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     restart: unless-stopped
     # comando padrao (uvicorn) vem do Dockerfile
 
   ocsp:
-    image: capsule-ca:latest
+    image: certward:latest
     depends_on: [webui]
     environment:
       CA_BASE: /ca
     volumes:
       - ca-data:/ca
     command: ["/opt/ca-app/docker/entrypoint-ocsp.sh"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     restart: unless-stopped
 
   crl:
-    image: capsule-ca:latest
+    image: certward:latest
     depends_on: [webui]
     environment:
       CA_BASE: /ca
     volumes:
       - ca-data:/ca
     command: ["/opt/ca-app/docker/entrypoint-crl.sh"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     restart: unless-stopped
 
   nginx:
     build:
       context: ..
       dockerfile: docker/Dockerfile.nginx
-    image: capsule-nginx:latest
+    image: certward-nginx:latest
     depends_on:
       webui:
         condition: service_healthy
@@ -60,6 +78,11 @@ services:
       - "443:443"                   # admin. (https, cert da CA)
     volumes:
       - ca-data:/ca:ro              # /ca/web (artefatos) e /ca/tls (cert admin)
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
     restart: unless-stopped
 
 volumes:

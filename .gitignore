@@ -12,6 +12,7 @@ docker/.env
 ca.env
 config.json
 admin.json
+session.secret
 
 # Estado da CA / backups / artefatos
 ca-backup*.tgz
