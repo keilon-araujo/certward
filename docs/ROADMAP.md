@@ -49,10 +49,15 @@ Princípio de sequenciamento: **melhorar só o código que sobrevive ao Plano B*
       não expõe as chaves de assinante.
 
 ## Fase 2 — step-ca em paralelo (dev)
-- [ ] Subir `step-ca`; hierarquia **root offline** + intermediária com name constraints.
-- [ ] **OCSP real** + CRL + **provisioners** (ACME, OIDC/JWK).
-- [ ] Validar emissão/revogação/OCSP/ACME em dev.
-- [ ] Plano de **HSM/KMS** para a chave da intermediária (PKCS#11 / KMS de nuvem).
+*Stack opt-in isolado (`docker-compose.stepca.yml`); guia em [STEPCA-DEV.md](STEPCA-DEV.md).*
+
+- [x] Subir `step-ca`; hierarquia root + intermediária (2 camadas, ECDSA P-256)
+      com **política de nomes** limitando ao domínio (equivale a name constraints).
+- [x] **Provisioners** JWK (admin) e **ACME** (auto-inscrição/renovação) ativos.
+- [x] Validar emissão/revogação/ACME em dev (script `stepca-smoke.sh`, tudo verde).
+      *Achado:* step-ca **não faz OCSP** (modelo de vida curta + CRL/revogação
+      passiva) — decisão de OCSP-vs-vida-curta fica para a Fase 3.
+- [x] **Plano de HSM/KMS** documentado (PKCS#11 / KMS de nuvem para a intermediária).
 
 ## Fase 3 — Rewire do control plane sobre o step-ca
 - [ ] Implementar `ca_engine` com **cliente step-ca** (substitui os scripts bash).
