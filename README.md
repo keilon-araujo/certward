@@ -74,8 +74,11 @@ decodificar um PEM colado, e baixar `cert` / `chain` / `key` ou um **pacote
 
 **Chaves em repouso:** as chaves de assinante são **cifradas** (Fernet/KEK) em
 `newcerts/<serial>.key.enc` e o texto claro é destruído após a emissão; o PKCS#12
-é gerado sob demanda no download. A KEK vem de Docker secret/`CA_KEK` ou, no lab,
-é gerada em `/ca/kek` (nesse caso, proteja-se com o **backup cifrado**).
+é gerado sob demanda no download. A **chave da intermediária** também é **cifrada**
+(AES-256) — a passphrase vem do Docker secret `ca_int_pass` (ou `/ca/int_pass` no
+lab). A KEK vem de Docker secret/`CA_KEK` ou, no lab, é gerada em `/ca/kek` (nesse
+caso, proteja-se com o **backup cifrado**). Emissão/revogação/CRL são
+**serializadas** (file-lock) para não corromper o banco do openssl sob paralelismo.
 
 ## Arquitetura
 

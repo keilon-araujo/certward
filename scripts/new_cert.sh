@@ -17,6 +17,10 @@ CA_BASE="${CA_BASE:-/ca}"
 CONF="${CONF:-${CA_BASE}/openssl.cnf}"
 INT="${CA_BASE}/intermediate"
 
+# Passphrase da intermediaria (chave cifrada em repouso) -> INTPASS=(-passin ...)
+. "$(dirname "$0")/lib-intpass.sh"
+int_passin_args
+
 : "${CA_DOMAIN:=capsule.lab.br}"
 : "${CA_HOST_CA:=ca.${CA_DOMAIN}}"
 : "${CA_HOST_OCSP:=ocsp.${CA_DOMAIN}}"
@@ -119,7 +123,7 @@ URI.0 = http://${CA_HOST_CA}/ca.crl
 EOF
 
 echo "==> Assinando com a intermediaria (perfil: ${profile}, SAN: ${sans})"
-openssl ca -config "$CONF" -extfile "$extfile" -extensions "$ext" \
+openssl ca -config "$CONF" "${INTPASS[@]}" -extfile "$extfile" -extensions "$ext" \
     -days "$DAYS" -notext -md "${CA_DIGEST}" -batch -in "$csr" -out "$crt"
 
 # Guarda a chave POR SERIAL (newcerts/<serial>.key) — assim os downloads e a

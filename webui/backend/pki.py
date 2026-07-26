@@ -37,6 +37,7 @@ OPENSSL_CNF = CA_BASE / "openssl.cnf"
 AUDIT_LOG = CA_BASE / "audit.log"
 ADMIN_STORE = CA_BASE / "admin.json"
 KEK_PATH = CA_BASE / "kek"                    # KEK local (fallback); use Docker secret p/ producao
+INT_PASS_PATH = CA_BASE / "int_pass"          # passphrase local da intermediaria (fallback)
 SECRETS_DIR = Path("/run/secrets")            # onde o Docker monta secrets
 
 CA_FILES = {
@@ -146,6 +147,28 @@ def encrypt_bytes(data: bytes) -> bytes:
 
 def decrypt_bytes(blob: bytes) -> bytes:
     return _fernet().decrypt(blob)
+
+
+def load_int_passphrase() -> str:
+    """Passphrase que cifra a chave da INTERMEDIARIA em repouso.
+    Fonte: Docker secret 'ca_int_pass' / env CA_INT_PASS; senao gera uma local
+    em /ca/int_pass (protege backups cifrados; para proteger contra vazamento do
+    volume, forneca via Docker secret, fora do volume)."""
+    val = read_secret("ca_int_pass", "CA_INT_PASS")
+    if val:
+        return val
+    if INT_PASS_PATH.exists():
+        return INT_PASS_PATH.read_text().strip()
+    CA_BASE.mkdir(parents=True, exist_ok=True)
+    pw = random_pw(32)
+    INT_PASS_PATH.write_text(pw)
+    try:
+        os.chmod(INT_PASS_PATH, 0o600)
+    except OSError:
+        pass
+    print("[pki] CA_INT_PASS nao configurada: passphrase local gerada em /ca/int_pass. "
+          "Para proteger contra vazamento do volume, use um Docker secret 'ca_int_pass'.")
+    return pw
 
 
 # --------------------------------------------------------------------------- cert helpers

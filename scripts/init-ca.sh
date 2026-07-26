@@ -19,6 +19,10 @@ INT="${CA_BASE}/intermediate"
 WEB="${CA_BASE}/web"
 TLS="${CA_BASE}/tls"
 
+# Passphrase da intermediaria (cifra a chave em repouso). Resolve INTPASS=(-passin ...).
+. "$(dirname "$0")/lib-intpass.sh"
+int_passin_args
+
 # Defaults (fallback se o ca.env nao existir — mantem o comportamento antigo)
 : "${CA_DOMAIN:=capsule.lab.br}"
 : "${CA_ORG:=Capsule Corp}"
@@ -87,10 +91,15 @@ openssl req -config "$CONF" -key "${ROOT}/private/ca.key" "${PASSIN[@]}" \
 chmod 444 "${ROOT}/certs/ca.crt"
 
 # --------------------------------------------------------------------------
-echo "==> [2/6] Intermediate CA (RSA ${CA_KEY_SIZE}, SEM passphrase)"
-openssl genrsa -out "${INT}/private/intermediate.key" "${CA_KEY_SIZE}"
+if [ -n "${CA_INT_PASS:-}" ]; then
+    echo "==> [2/6] Intermediate CA (RSA ${CA_KEY_SIZE}, chave CIFRADA em repouso)"
+    openssl genrsa -aes256 -passout env:CA_INT_PASS -out "${INT}/private/intermediate.key" "${CA_KEY_SIZE}"
+else
+    echo "==> [2/6] Intermediate CA (RSA ${CA_KEY_SIZE}, SEM passphrase — defina CA_INT_PASS p/ cifrar)"
+    openssl genrsa -out "${INT}/private/intermediate.key" "${CA_KEY_SIZE}"
+fi
 chmod 400 "${INT}/private/intermediate.key"
-openssl req -config "$CONF" -key "${INT}/private/intermediate.key" \
+openssl req -config "$CONF" -key "${INT}/private/intermediate.key" "${INTPASS[@]}" \
     -new -"${CA_DIGEST}" -subj "$INT_SUBJ" -out "${INT}/csr/intermediate.csr"
 openssl ca -config "$CONF" -name CA_root "${PASSIN[@]}" -extensions v3_intermediate_ca \
     -days "${CA_INT_DAYS}" -notext -md "${CA_DIGEST}" -batch \
@@ -109,13 +118,13 @@ openssl genrsa -out "${INT}/private/ocsp.key" "${CA_KEY_SIZE}"
 chmod 400 "${INT}/private/ocsp.key"
 openssl req -config "$CONF" -key "${INT}/private/ocsp.key" \
     -new -"${CA_DIGEST}" -subj "$OCSP_SUBJ" -out "${INT}/csr/ocsp.csr"
-openssl ca -config "$CONF" -extensions ocsp -days 365 -notext -md "${CA_DIGEST}" -batch \
+openssl ca -config "$CONF" "${INTPASS[@]}" -extensions ocsp -days 365 -notext -md "${CA_DIGEST}" -batch \
     -in "${INT}/csr/ocsp.csr" -out "${INT}/certs/ocsp.crt"
 
 # --------------------------------------------------------------------------
 echo "==> [5/6] CRLs iniciais + publicacao em ${WEB}"
 openssl ca -config "$CONF" -name CA_root "${PASSIN[@]}" -gencrl -out "${ROOT}/crl/root.crl"
-openssl ca -config "$CONF" -name CA_intermediate -gencrl -out "${INT}/crl/intermediate.crl"
+openssl ca -config "$CONF" -name CA_intermediate "${INTPASS[@]}" -gencrl -out "${INT}/crl/intermediate.crl"
 cp "${ROOT}/certs/ca.crt"            "${WEB}/ca.crt"
 cp "${INT}/certs/intermediate.crt"   "${WEB}/intermediate.crt"
 cp "${INT}/certs/ca-chain.crt"       "${WEB}/ca-chain.crt"

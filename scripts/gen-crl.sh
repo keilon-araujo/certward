@@ -17,9 +17,10 @@ CONF="${CONF:-${CA_BASE}/openssl.cnf}"
 INT="${CA_BASE}/intermediate"
 ROOT="${CA_BASE}/root"
 WEB="${CA_BASE}/web"
+. "$(dirname "$0")/lib-intpass.sh"; int_passin_args    # INTPASS=(-passin ...) da intermediaria
 
 echo "==> Gerando CRL da intermediaria"
-openssl ca -config "$CONF" -name CA_intermediate -gencrl -out "${INT}/crl/intermediate.crl"
+openssl ca -config "$CONF" -name CA_intermediate "${INTPASS[@]}" -gencrl -out "${INT}/crl/intermediate.crl"
 cp "${INT}/crl/intermediate.crl" "${WEB}/ca.crl"
 chmod 444 "${WEB}/ca.crl"
 

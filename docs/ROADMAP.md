@@ -3,12 +3,17 @@
 Objetivo: levar a aplicação de "CA de laboratório madura" para uma **CA interna
 corporativa** confiável, servindo ~100 apps, com a root distribuída por GPO.
 
-**Estratégia:** adotar o **Smallstep `step-ca`** como *motor* (emissão, OCSP real,
-CRL, ACME, HSM/KMS) e manter a nossa **UI/control plane/auditoria** por cima.
-Não investir em endurecer o motor bash/openssl atual — ele será substituído.
+**Estratégia (revisada — Plano C):** **manter e endurecer o motor openssl atual**.
+O `step-ca` foi avaliado em dev (Fase 2) e **descartado**: no modelo escolhido
+(**cert longo + OCSP/CRL**, não vida-curta/ACME) ele daria *menos* do que já
+temos — não expõe OCSP e exigiria uma reescrita grande. Como as Fases 0/1 já
+entregaram a maior parte do endurecimento, resta fechar os gaps no próprio motor.
 
-Princípio de sequenciamento: **melhorar só o código que sobrevive ao Plano B**
-(control plane, UI, auth, testes) + **abstrair o motor** para a troca ser limpa.
+> Histórico: a estratégia original era adotar o `step-ca` como motor (Plano B).
+> A avaliação da Fase 2 mostrou que, para cert longo + OCSP/CRL, não compensa.
+
+Princípio de sequenciamento: **abstração de motor (`ca_engine`) preservada** — se
+um dia fizer sentido trocar, o ponto de extensão continua lá.
 
 ---
 
@@ -48,21 +53,26 @@ Princípio de sequenciamento: **melhorar só o código que sobrevive ao Plano B*
       fallback para o lab. Com a KEK fora do volume, um vazamento do volume/backup
       não expõe as chaves de assinante.
 
-## Fase 2 — step-ca em paralelo (dev)
+## Fase 2 — step-ca avaliado (dev) e **descartado**
 *Stack opt-in isolado (`docker-compose.stepca.yml`); guia em [STEPCA-DEV.md](STEPCA-DEV.md).*
 
-- [x] Subir `step-ca`; hierarquia root + intermediária (2 camadas, ECDSA P-256)
-      com **política de nomes** limitando ao domínio (equivale a name constraints).
-- [x] **Provisioners** JWK (admin) e **ACME** (auto-inscrição/renovação) ativos.
-- [x] Validar emissão/revogação/ACME em dev (script `stepca-smoke.sh`, tudo verde).
-      *Achado:* step-ca **não faz OCSP** (modelo de vida curta + CRL/revogação
-      passiva) — decisão de OCSP-vs-vida-curta fica para a Fase 3.
-- [x] **Plano de HSM/KMS** documentado (PKCS#11 / KMS de nuvem para a intermediária).
+- [x] Avaliado o `step-ca` em paralelo (2 camadas, policy de nomes, JWK+ACME,
+      revogação) — tudo funcionou. **Decisão: não adotar** (ver estratégia acima).
+- [x] Achados documentados (sem OCSP; ECDSA default; wildcard exige flag) e
+      **plano de HSM/KMS** registrado — reaproveitável se a decisão mudar.
 
-## Fase 3 — Rewire do control plane sobre o step-ca
-- [ ] Implementar `ca_engine` com **cliente step-ca** (substitui os scripts bash).
-- [ ] UI, dashboard, auditoria e ciclo de vida **permanecem**, agora sobre o step-ca.
-- [ ] Aposentar `new_cert.sh`/`revoke-cert.sh`/`gen-crl.sh` e o DB do openssl.
+## Fase 3 — Endurecer o motor openssl (Plano C)
+- [x] **Chave da intermediária cifrada em repouso** (AES-256); passphrase por
+      **Docker secret** `ca_int_pass` (fallback env/local `/ca/int_pass`).
+      Emissão/revogação/CRL passam `-passin`; retrocompatível com CAs legadas
+      (chave em claro segue assinando). *Resíduo documentado:* a chave do
+      **signer OCSP** (delegada, baixo valor, reemissível) segue em claro.
+- [x] **Lock de concorrência** (file-lock/flock) em torno de emissão/renovação/
+      revogação/CRL — serializa `openssl ca` entre workers/réplicas; sob disputa
+      devolve 503 em vez de travar. Verificado: 6 emissões paralelas → `index.txt`
+      íntegro, seriais únicos.
+- [ ] (Opcional) **Emissão por CSR** — a chave nunca toca a CA.
+- [ ] (Upgrade futuro) **PKCS#11/HSM** para a intermediária quando houver hardware.
 
 ## Fase 4 — Integração corporativa / produção
 - [ ] **SSO + papéis** (emissor / aprovador / leitura) via AD/Entra/OIDC;
