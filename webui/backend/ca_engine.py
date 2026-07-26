@@ -134,6 +134,24 @@ class BashEngine(CAEngine):
                 return legacy.read_bytes()
         return None
 
+    def _store_p12pass(self, serial: str, pw: str):
+        """Guarda (cifrada com a KEK) a senha do PKCS#12 escolhida na emissao,
+        para o bundle usar a MESMA senha que o usuario definiu/aceitou."""
+        if not serial or not pw:
+            return
+        dst = pki.INT / "newcerts" / f"{serial}.p12pass.enc"
+        dst.write_bytes(pki.encrypt_bytes(pw.encode()))
+        os.chmod(dst, 0o400)
+
+    def _load_p12pass(self, serial: str) -> str | None:
+        src = pki.INT / "newcerts" / f"{serial}.p12pass.enc"
+        if src.exists():
+            try:
+                return pki.decrypt_bytes(src.read_bytes()).decode()
+            except Exception:
+                return None
+        return None
+
     # ------------------------------------------------------------------ setup
     def initialize(self, cfg: dict, passphrase: str) -> str:
         if pki.ca_present():
@@ -201,8 +219,9 @@ class BashEngine(CAEngine):
 
     # ------------------------------------------------------------------ escrita
     def issue(self, name: str, profile: str, sans: str, p12_password: str) -> str:
-        # p12_password: ignorado (o PKCS#12 e gerado sob demanda no download com
-        # senha aleatoria de 30 caracteres). Mantido na assinatura por compat.
+        # p12_password: senha do PKCS#12 escolhida na emissao (a UI sugere 30
+        # chars aleatorios; o usuario pode editar). Guardada cifrada e usada no
+        # bundle. Se vazia, o download gera uma aleatoria.
         if not pki.ca_present():
             raise EngineError(409, "CA nao inicializada")
         if not pki.WILDCARD_RE.match(name):
@@ -211,7 +230,9 @@ class BashEngine(CAEngine):
             raise EngineError(400, "perfil invalido")
         log = self._run("new_cert.sh", [name, profile, sans], timeout=300)
         m = _SERIAL_RE.search(log)
-        self._protect_key(m.group(1) if m else "", pki.fname(name))
+        serial = m.group(1) if m else ""
+        self._protect_key(serial, pki.fname(name))
+        self._store_p12pass(serial, p12_password)
         return log
 
     def revoke(self, serial: str, reason: str) -> str:
@@ -242,7 +263,9 @@ class BashEngine(CAEngine):
             p.unlink(missing_ok=True)
         log = self._run("new_cert.sh", [cn, profile, sans], timeout=300)
         m = _SERIAL_RE.search(log)
-        self._protect_key(m.group(1) if m else "", slug)
+        newserial = m.group(1) if m else ""
+        self._protect_key(newserial, slug)
+        self._store_p12pass(newserial, p12_password)
         return log
 
     def regenerate_crl(self) -> str:
@@ -315,7 +338,7 @@ class BashEngine(CAEngine):
         cachain = pki.INT / "certs" / "ca-chain.crt"
         if keydata is None or not cachain.exists():
             raise EngineError(404, "cert/chave nao encontrados para este serial")
-        pw = pki.random_pw(30)
+        pw = self._load_p12pass(serial) or pki.random_pw(30)   # a senha definida na emissao, se houver
         p12 = self._make_p12(certpem, keydata, cachain, cn, pw)
         dec = pki.decode_cert(pki.load_cert(certpem))
         sans = next((e["value"] for e in dec["extensions"] if e["name"] == "subjectAltName"), [])
@@ -345,7 +368,7 @@ def _bundle_readme(slug: str, cn: str, dec: dict, sans) -> str:
         f"  {slug}.key         chave privada (PEM, sem senha)",
         f"  {slug}.chain.crt   certificado + intermediaria + raiz (use no F5 BIG-IP)",
         f"  {slug}.p12         PKCS#12 (use no A10 Thunder)",
-        "  PASS.txt          senha aleatoria (30 caracteres) do arquivo .p12",
+        "  PASS.txt          senha do arquivo .p12 (definida na emissao; 30 chars aleatorios por padrao)",
         "", "IDENTIDADE",
         f"  Subject : {pair(dec.get('subject', []))}",
         f"  Issuer  : {pair(dec.get('issuer', []))}",

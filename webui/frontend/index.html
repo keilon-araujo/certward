@@ -423,6 +423,13 @@ dl dd.mono{font-size:12px}
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+// senha aleatoria (mesmo alfabeto do backend pki.random_pw) para sugerir a senha do PKCS#12
+const PW_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#%^*-_=+.?";
+function randomPw(n = 30) {
+  const a = new Uint32Array(n); crypto.getRandomValues(a);
+  let s = ""; for (let i = 0; i < n; i++) s += PW_ALPHABET[a[i] % PW_ALPHABET.length];
+  return s;
+}
 
 function fmtDate(iso, withTime = true) {
   if (!iso) return "—";
@@ -441,6 +448,7 @@ function shortFp(fp, groups = 8) {
 }
 const SVG = {
   copy: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  refresh: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
   check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
   alert: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
   info: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>',
@@ -470,6 +478,7 @@ const S = {
   sort: { key: "days_left", dir: "asc" },
   busy: {},            // { crl:true, setup:true, issue:true, revoke:"1001" }
   initLog: null,
+  issueP12: null,      // senha do PKCS#12 sugerida (30 chars aleatorios, editavel)
   issueResult: null,   // { cn, serial, log }
   detail: null,        // { serial, data, loading, error }
   wizard: { data: null, error: null },
@@ -825,6 +834,7 @@ const PROFILES = [
 function viewIssue() {
   if (S.status && !S.status.initialized) return notInitEmpty("Emitir depende da intermediária. Inicialize a CA primeiro.");
   const busy = !!S.busy.issue;
+  if (S.issueP12 == null) S.issueP12 = randomPw(30);   // sugere uma senha de p12 na 1a renderizacao
   let html = '<div class="grid2"><div class="card"><div class="card-h"><h2>Emitir certificado</h2></div><div class="card-b">'
     + '<form class="form" id="issueform" novalidate>'
     + '<div class="field"><label for="f-name">Nome / hostname (CN)</label>'
@@ -840,9 +850,13 @@ function viewIssue() {
     + '<input id="f-sans" class="mono" type="text" placeholder="DNS:app1.capsule.lab.br,IP:10.0.0.10" autocomplete="off" spellcheck="false"' + (busy ? " disabled" : "") + ">"
     + '<div class="hint">Lista separada por vírgula com prefixo de tipo: <code>DNS:</code>, <code>IP:</code>, <code>email:</code>. Em wildcard, o domínio nu (apex) é incluído automaticamente.</div>'
     + '<div class="err" id="e-sans" hidden></div></div>'
-    + '<div class="field"><label for="f-p12">Senha do PKCS#12 <span class="hint">(opcional)</span></label>'
-    + '<input id="f-p12" type="password" placeholder="••••••••" autocomplete="new-password"' + (busy ? " disabled" : "") + ">"
-    + '<div class="hint">Protege o <code>.p12</code> usado na importação do A10 Thunder.</div></div>'
+    + '<div class="field"><label for="f-p12">Senha do PKCS#12 <span class="hint">(sugerida — edite se quiser)</span></label>'
+    + '<div style="display:flex;gap:8px;align-items:stretch">'
+    + '<input id="f-p12" class="mono" type="text" value="' + esc(S.issueP12) + '" autocomplete="off" spellcheck="false"' + (busy ? " disabled" : "") + ' style="flex:1">'
+    + '<button class="btn sm ghost" type="button" data-act="genp12" title="Gerar nova senha"' + (busy ? " disabled" : "") + ">" + SVG.refresh + "</button>"
+    + '<button class="btn sm ghost" type="button" data-copy="' + esc(S.issueP12) + '" title="Copiar"' + (busy ? " disabled" : "") + ">" + SVG.copy + "</button>"
+    + "</div>"
+    + '<div class="hint">Protege o <code>.p12</code> (import no A10 Thunder). Vai no <code>PASS.txt</code> do pacote <code>.zip</code>. 30 caracteres aleatórios por padrão.</div></div>'
     + '<div><button class="btn primary" type="submit"' + (busy ? " disabled" : "") + ">"
     + (busy ? SVG.spin + " Emitindo…" : "Emitir certificado") + "</button></div>"
     + (busy ? '<div class="bar" aria-label="Emissão em andamento"></div>' : "")
@@ -1228,6 +1242,7 @@ async function submitIssue(form) {
     await loadCerts();
     const match = S.certs.filter((c) => c.cn === name).sort((a, b) => (parseInt(b.serial, 16) || 0) - (parseInt(a.serial, 16) || 0))[0];
     S.issueResult = { cn: name, serial: match ? match.serial : null, log: res && res.log };
+    S.issueP12 = randomPw(30);   // sugestao nova para a proxima emissao (evita reuso de senha)
     loadStatus();
     toast("ok", "Certificado emitido", name + " · perfil " + profile);
     render();
@@ -1458,7 +1473,12 @@ function renewModal() {
       + (r.profile === p.id ? " checked" : "") + dis + "><span><b>" + p.t + "</b><small>" + p.d + "</small></span></label>").join("")
     + "</div></fieldset>"
     + '<div class="field"><label for="rn-sans">SANs</label><input id="rn-sans" class="mono" value="' + esc(r.sans || "") + '"' + dis + "></div>"
-    + '<div class="field"><label for="rn-p12">Senha do PKCS#12 <span class="hint">(opcional)</span></label><input id="rn-p12" type="password"' + dis + "></div>"
+    + '<div class="field"><label for="rn-p12">Senha do PKCS#12 <span class="hint">(sugerida — edite se quiser)</span></label>'
+    + '<div style="display:flex;gap:8px;align-items:stretch">'
+    + '<input id="rn-p12" class="mono" type="text" value="' + esc(r.p12 || "") + '" autocomplete="off" spellcheck="false"' + dis + ' style="flex:1">'
+    + '<button class="btn sm ghost" type="button" data-act="genrnp12" title="Gerar nova senha"' + dis + ">" + SVG.refresh + "</button>"
+    + '<button class="btn sm ghost" type="button" data-copy="' + esc(r.p12 || "") + '" title="Copiar"' + dis + ">" + SVG.copy + "</button>"
+    + "</div></div>"
     + '<label class="radio"><input type="checkbox" id="rn-revoke" checked' + dis + "><span><b>Revogar o certificado antigo</b>"
     + "<small>desmarque para manter os dois válidos até o antigo expirar</small></span></label>"
     + "</div>"
@@ -1552,7 +1572,7 @@ document.addEventListener("click", (ev) => {
     const serial = rn.dataset.renew;
     const c = S.certs.find((x) => String(x.serial) === serial) || (S.detail && S.detail.data) || {};
     const sans = Array.isArray(c.sans) ? c.sans.join(",") : "";
-    S.renew = { serial, cn: c.cn, profile: (c.profile === "server" || c.profile === "client" || c.profile === "dual") ? c.profile : "server", sans };
+    S.renew = { serial, cn: c.cn, profile: (c.profile === "server" || c.profile === "client" || c.profile === "dual") ? c.profile : "server", sans, p12: randomPw(30) };
     S.renewError = null; renderLayer();
     return;
   }
@@ -1589,6 +1609,14 @@ document.addEventListener("click", (ev) => {
     else if (a === "doChangePw") doChangePw();
     else if (a === "doRenew") doRenew();
     else if (a === "reloadAudit") loadAudit();
+    else if (a === "genp12" || a === "genrnp12") {
+      // regenera a senha sugerida sem re-render (preserva os outros campos)
+      const id = a === "genp12" ? "#f-p12" : "#rn-p12";
+      const pw = randomPw(30);
+      if (a === "genp12") S.issueP12 = pw; else if (S.renew) S.renew.p12 = pw;
+      const inp = $(id); if (inp) inp.value = pw;
+      const cp = act.parentElement.querySelector("[data-copy]"); if (cp) cp.dataset.copy = pw;
+    }
     return;
   }
   const row = t.closest("tbody tr[data-serial]");
@@ -1603,6 +1631,8 @@ document.addEventListener("input", (ev) => {
     return;   // sem re-render: mantém foco/cursor
   }
   if (ev.target.id === "d-pem") { S.decodePem = ev.target.value; return; }
+  if (ev.target.id === "f-p12") { S.issueP12 = ev.target.value; return; }
+  if (ev.target.id === "rn-p12") { if (S.renew) S.renew.p12 = ev.target.value; return; }
   if (ev.target.id === "q") { S.q = ev.target.value; restoreFocus = "#q"; render(); }
 });
 document.addEventListener("change", (ev) => {
