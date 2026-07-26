@@ -32,8 +32,8 @@ from ca_engine import Download, get_engine
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 
-ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.get("ADMIN_PASS")
+ADMIN_USER = pki.read_secret("admin_user", "ADMIN_USER") or "admin"
+ADMIN_PASS = pki.read_secret("admin_pass", "ADMIN_PASS")   # Docker secret > *_FILE > env
 if not ADMIN_PASS:
     ADMIN_PASS = secrets.token_urlsafe(12)
     print(f"[webui] ADMIN_PASS nao definido. Senha temporaria: {ADMIN_PASS}")
@@ -182,6 +182,7 @@ class SetupBody(BaseModel):
     crl_days: int | None = 30
     crl_days_root: int | None = 180
     digest: str = "sha256"
+    name_constraints: bool = True     # limita a intermediaria ao dominio interno
     passphrase: str = Field(min_length=8)
 
 

@@ -105,6 +105,7 @@ subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid:always,issuer
 basicConstraints       = critical, CA:true, pathlen:0
 keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
+{{NAME_CONSTRAINTS_LINE}}
 authorityInfoAccess    = @issuer_info_int
 crlDistributionPoints  = @crl_info_int
 

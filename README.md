@@ -35,18 +35,22 @@ de propósito (AIA/CRL/OCSP usam HTTP).
 | Nomes | CN da Root CA e da Intermediate CA (derivados da organização) |
 | Hosts (avançado) | `ca.` / `ocsp.` / `admin.` — derivados do domínio, editáveis |
 | Cripto/validade (avançado) | chave RSA das CAs e dos folha, digest (sha256/384/512), validade raiz/int/folha/CRL |
-| Segurança | passphrase da raiz (+confirmação) |
+| Segurança | passphrase da raiz (+confirmação); **Name Constraints** (liga por padrão: limita a intermediária a emitir só dentro do domínio) |
 
 Só `domínio`, `organização` e `passphrase` são obrigatórios; o resto tem default
 derivado. O `openssl.cnf` é renderizado de `openssl.cnf.tmpl` com esses valores.
 
 ## Autenticação
 
-Tela de **login com sessão** (cookie). No primeiro acesso use `ADMIN_USER`/
-`ADMIN_PASS` do `docker/.env`; depois **troque a senha pela interface** (fica
-hasheada com PBKDF2 em `/ca/admin.json`) e use **Sair** para logout. Há
-**rate-limit** no login e **trilha de auditoria** (aba Auditoria). Esqueceu a
-senha? `make reset-admin` volta a usar o `ADMIN_PASS` do `.env`.
+Tela de **login com sessão** (token HMAC assinado, stateless). No primeiro acesso
+use `ADMIN_USER`/`ADMIN_PASS` do `docker/.env`; depois **troque a senha pela
+interface** (fica hasheada com PBKDF2 em `/ca/admin.json`) e use **Sair** para
+logout. Há **rate-limit** no login e **trilha de auditoria** (aba Auditoria).
+Esqueceu a senha? `make reset-admin` volta a usar o `ADMIN_PASS` do `.env`.
+
+Em produção, tire `ADMIN_PASS` (e a KEK das chaves) do `.env` e use **Docker
+secrets** com o overlay `docker/docker-compose.secrets.yml` (a precedência é
+`/run/secrets/<nome>` > `<ENV>_FILE` > env).
 
 ## Operação do dia a dia (`make`)
 
@@ -56,18 +60,25 @@ make up | down | logs | ps                 # ciclo da stack
 make issue NAME=app1.<dom> PROFILE=server SANS="DNS:app1.<dom>,IP:10.0.0.10"
 make revoke SERIAL=1001 REASON=keyCompromise
 make crl ; make ls ; make expiring DAYS=30
-make backup | restore                      # volume da CA (backup/restore)
+make backup BACKUP_PASS=<senha>            # backup CIFRADO -> ./ca-backup.tgz.enc
+make restore BACKUP_PASS=<senha>           # restaura ./ca-backup.tgz.enc (valida antes de tocar no volume)
 make reset-admin                           # recuperar senha do admin
 ```
 
 O grosso, porém, é feito pela **UI**: emitir (server/client/dual, wildcard com
-apex automático), **renovar** (revogando o antigo ou mantendo os dois), revogar,
-regenerar CRL, **consultar OCSP ao vivo**, decodificar um PEM colado, e baixar
-`cert` / `chain` / `key` ou um **pacote `.zip`** (crt+key+chain+p12+senha).
+apex automático), **renovar** (revogando o antigo ou mantendo os dois; a
+renovação faz **rekey**), revogar, regenerar CRL, **consultar OCSP ao vivo**,
+decodificar um PEM colado, e baixar `cert` / `chain` / `key` ou um **pacote
+`.zip`** (crt+key+chain+p12+senha aleatória).
+
+**Chaves em repouso:** as chaves de assinante são **cifradas** (Fernet/KEK) em
+`newcerts/<serial>.key.enc` e o texto claro é destruído após a emissão; o PKCS#12
+é gerado sob demanda no download. A KEK vem de Docker secret/`CA_KEK` ou, no lab,
+é gerada em `/ca/kek` (nesse caso, proteja-se com o **backup cifrado**).
 
 ## Arquitetura
 
-Uma imagem única (`capsule-ca`) roda de 3 formas + o nginx, compartilhando o
+Uma imagem única (`certward`) roda de 3 formas + o nginx, compartilhando o
 volume `ca-data` (montado em `/ca`; o código vive em `/opt/ca-app`):
 
 | Serviço | Papel |

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
 from cryptography.x509.oid import ExtensionOID, NameOID
@@ -35,6 +36,8 @@ OPENSSL_TMPL = SCRIPTS / "openssl.cnf.tmpl"
 OPENSSL_CNF = CA_BASE / "openssl.cnf"
 AUDIT_LOG = CA_BASE / "audit.log"
 ADMIN_STORE = CA_BASE / "admin.json"
+KEK_PATH = CA_BASE / "kek"                    # KEK local (fallback); use Docker secret p/ producao
+SECRETS_DIR = Path("/run/secrets")            # onde o Docker monta secrets
 
 CA_FILES = {
     "ca.crt": ROOT / "certs" / "ca.crt",
@@ -74,6 +77,66 @@ def fname(cn: str) -> str:
 def random_pw(n: int = 30) -> str:
     alphabet = string.ascii_letters + string.digits + "!@#%^*-_=+.?"
     return "".join(secrets.choice(alphabet) for _ in range(n))
+
+
+# --------------------------------------------------------------------------- secrets / cripto
+def read_secret(name: str, env_var: str) -> str | None:
+    """Resolve um segredo por precedencia, do mais seguro ao mais simples:
+       1) arquivo apontado por <ENV_VAR>_FILE
+       2) Docker secret em /run/secrets/<name>
+       3) variavel de ambiente <ENV_VAR>
+    Devolve None se nada estiver definido."""
+    fp = os.environ.get(env_var + "_FILE")
+    if fp and Path(fp).exists():
+        return Path(fp).read_text().strip()
+    sp = SECRETS_DIR / name
+    if sp.exists():
+        return sp.read_text().strip()
+    return os.environ.get(env_var)
+
+
+_FERNET: Fernet | None = None
+
+
+def load_kek() -> bytes:
+    """KEK (Fernet) para cifrar chaves de assinante em repouso.
+    Fonte: Docker secret 'ca_kek' / env CA_KEK; senao gera uma local em /ca/kek.
+    A KEK local protege BACKUPS cifrados, mas NAO um vazamento do volume — para
+    isso, forneca a KEK via Docker secret (fora do volume)."""
+    val = read_secret("ca_kek", "CA_KEK")
+    if val:
+        try:
+            Fernet(val.encode())        # valida formato
+        except Exception:
+            raise EngineError(500, "CA_KEK invalida (esperado chave Fernet base64 urlsafe de 32 bytes)")
+        return val.encode()
+    if KEK_PATH.exists():
+        return KEK_PATH.read_bytes().strip()
+    CA_BASE.mkdir(parents=True, exist_ok=True)
+    key = Fernet.generate_key()
+    KEK_PATH.write_bytes(key)
+    try:
+        os.chmod(KEK_PATH, 0o600)
+    except OSError:
+        pass
+    print("[pki] CA_KEK nao configurada: KEK local gerada em /ca/kek. "
+          "Para proteger contra vazamento do volume, use um Docker secret 'ca_kek'.")
+    return key
+
+
+def _fernet() -> Fernet:
+    global _FERNET
+    if _FERNET is None:
+        _FERNET = Fernet(load_kek())
+    return _FERNET
+
+
+def encrypt_bytes(data: bytes) -> bytes:
+    return _fernet().encrypt(data)
+
+
+def decrypt_bytes(blob: bytes) -> bytes:
+    return _fernet().decrypt(blob)
 
 
 # --------------------------------------------------------------------------- cert helpers
@@ -386,7 +449,19 @@ def resolve_config(b) -> dict:
         "crl_days": _posint(b.crl_days, 30, "crl_days"),
         "crl_days_root": _posint(b.crl_days_root, 180, "crl_days_root"),
         "digest": b.digest,
+        "name_constraints": bool(getattr(b, "name_constraints", True)),
     }
+
+
+def _name_constraints_line(cfg) -> str:
+    """Linha nameConstraints da intermediaria: limita a CA (criptograficamente)
+    a emitir apenas dentro do dominio interno. 'localhost' entra para o cert TLS
+    da propria interface admin. IPs ficam sem restricao (SANs de IP continuam
+    validos, pois so restringimos DNS)."""
+    if not cfg.get("name_constraints", True):
+        return ""
+    dom = cfg["domain"]
+    return f"nameConstraints        = critical, permitted;DNS:{dom}, permitted;DNS:localhost"
 
 
 def render_openssl_cnf(cfg):
@@ -398,6 +473,7 @@ def render_openssl_cnf(cfg):
         "KEY_SIZE": str(cfg["key_size"]), "DIGEST": cfg["digest"],
         "ROOT_DAYS": str(cfg["root_days"]), "LEAF_DAYS": str(cfg["leaf_days"]),
         "CRL_DAYS": str(cfg["crl_days"]), "CRL_DAYS_ROOT": str(cfg["crl_days_root"]),
+        "NAME_CONSTRAINTS_LINE": _name_constraints_line(cfg),
     }
     for k, v in repl.items():
         tmpl = tmpl.replace("{{" + k + "}}", v)

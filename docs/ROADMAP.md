@@ -32,12 +32,21 @@ Princípio de sequenciamento: **melhorar só o código que sobrevive ao Plano B*
 ## Fase 1 — Ganhos de segurança independentes de motor
 *Valem para o bash de hoje E para o step-ca de amanhã.*
 
-- [ ] **Name Constraints** na intermediária (limita a CA aos domínios internos).
-- [ ] **Emissão por CSR** como caminho de primeira classe (a chave privada
-      nunca sai do servidor nem toca a CA). Manter "gera pra mim" só como conveniência.
-- [ ] **Backups cifrados** + restore **testado**; nunca exportar chave em claro.
-- [ ] **Secrets**: tirar `ADMIN_PASS`/passphrase de `.env` → secret manager /
-      Docker secrets.
+- [x] **Name Constraints** na intermediária (`critical`, `permitted;DNS:<domínio>`
+      + `localhost`), limitando a CA ao domínio interno. IPs ficam livres (SANs de
+      IP seguem válidos). Verificado: cert fora do domínio é rejeitado pela cadeia.
+- [x] **Chaves de assinante cifradas em repouso + rekey na renovação**: a
+      ferramenta continua gerando a chave, mas ela é **cifrada** (Fernet/KEK) em
+      `newcerts/<serial>.key.enc` e o texto claro é **destruído** logo após a
+      emissão. A renovação passa a **rekey** (chave nova sempre). O PKCS#12 é
+      gerado sob demanda no download, com senha aleatória.
+      *(Emissão por CSR fica como extra opcional, não implementado.)*
+- [x] **Backups cifrados** (AES-256, `openssl enc -pbkdf2`) + restore **testado**
+      (valida o gzip antes de tocar no volume; senha errada não destrói nada).
+- [x] **Secrets**: `ADMIN_PASS` e a **KEK** podem vir de **Docker secrets**
+      (`/run/secrets`) via overlay `docker-compose.secrets.yml`; env continua como
+      fallback para o lab. Com a KEK fora do volume, um vazamento do volume/backup
+      não expõe as chaves de assinante.
 
 ## Fase 2 — step-ca em paralelo (dev)
 - [ ] Subir `step-ca`; hierarquia **root offline** + intermediária com name constraints.

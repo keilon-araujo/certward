@@ -54,7 +54,6 @@ key="${INT}/private/${fname}.key"
 csr="${INT}/reqs/${fname}.csr"
 crt="${INT}/certs/${fname}.crt"
 chain="${INT}/certs/${fname}.chain.crt"
-p12="${INT}/certs/${fname}.p12"
 [ -f "$crt" ] && { echo "Ja existe ${crt}. Escolha outro nome ou revogue antes."; exit 1; }
 
 # subject (omite ST se vazio)
@@ -98,17 +97,16 @@ openssl ca -config "$CONF" -extfile "$extfile" -extensions "$ext" \
 
 # Guarda a chave POR SERIAL (newcerts/<serial>.key) — assim os downloads e a
 # renovacao ficam independentes do CN (permite dois certs do mesmo nome).
+# A interface (ca_engine) CIFRA essa chave em repouso e apaga o texto claro
+# logo apos a emissao; o serial abaixo diz a ela qual chave proteger.
 SER="$(openssl x509 -in "$crt" -noout -serial | cut -d= -f2)"
 if [ -n "$SER" ]; then cp "$key" "${INT}/newcerts/${SER}.key" && chmod 400 "${INT}/newcerts/${SER}.key"; fi
 
-echo "==> Montando a chain e o PKCS#12"
+echo "==> Montando a chain (o PKCS#12 e gerado sob demanda no download, com senha aleatoria)"
 cat "$crt" "${INT}/certs/ca-chain.crt" > "$chain"
-if [ -n "${P12_PASS+x}" ]; then P12OUT=(-passout env:P12_PASS); else P12OUT=(); fi
-openssl pkcs12 -export "${P12OUT[@]}" -inkey "$key" -in "$crt" \
-    -certfile "${INT}/certs/ca-chain.crt" -name "$name" -out "$p12"
 
 echo
 echo "OK:"
 echo "  chain : $chain   <- F5 (SSL profile)"
-echo "  p12   : $p12     <- A10 (import PKCS#12)"
+echo "ISSUED_SERIAL=${SER}"
 openssl x509 -in "$crt" -noout -subject -ext subjectAltName,extendedKeyUsage
