@@ -51,6 +51,25 @@ CA_FILES = {
 # --------------------------------------------------------------------------- validacao
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 WILDCARD_RE = re.compile(r"^(\*\.)?[A-Za-z0-9._-]{1,120}$")   # hostname ou wildcard *.dominio
+# Certificado de PESSOA nao tem hostname: o identificador e um e-mail, um UPN
+# ou um nome com espaco. Validar isso com a regra de DNS recusava exatamente o
+# caso de uso do perfil `client` — o perfil existia e nao dava para usar.
+PESSOA_RE = re.compile(r"^[A-Za-z0-9._%+\- ]{1,64}(@[A-Za-z0-9.-]{1,120})?$")
+
+
+def nome_valido(nome: str, profile: str) -> bool:
+    """Valida o nome conforme o PROPOSITO do certificado.
+
+    `server` exige nome de host (ou wildcard) — nada de espaco ou arroba.
+    `client`/`dual` aceitam tambem identificador de pessoa. `dual` serve os dois
+    papeis, entao aceita as duas formas.
+    """
+    nome = (nome or "").strip()
+    if not nome:
+        return False
+    if profile == "server":
+        return bool(WILDCARD_RE.match(nome))
+    return bool(WILDCARD_RE.match(nome) or PESSOA_RE.match(nome))
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](-*[a-z0-9])*\.)+[a-z]{2,}$")
 PROFILES = {"server", "client", "dual"}
 REASONS = {

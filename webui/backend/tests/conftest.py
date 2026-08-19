@@ -45,9 +45,11 @@ class FakeEngine(CAEngine):
             raise EngineError(404, "certificado nao encontrado")
         return {"serial": "1000", "cn": "a.test.lab", "decoded": {"version": "v3"}, "pem": "PEM"}
 
-    def issue(self, name, profile, sans, p12_password, key_type="ecdsa-p256"):
+    def issue(self, name, profile, sans, p12_password, key_type="ecdsa-p256",
+              csr_pem=""):
         self.calls.append(("issue", name, profile, key_type))
-        return "[issue] ok"
+        self.calls.append(("issue_csr", name, bool(csr_pem)))
+        return "[issue] ok (por CSR)" if csr_pem else "[issue] ok"
 
     def renew(self, serial, profile, sans, p12_password, revoke_old, reason, key_type="ecdsa-p256"):
         self.calls.append(("renew", serial, revoke_old, key_type))
@@ -86,6 +88,9 @@ def client(fake_engine):
     prev = app_module.engine
     app_module.engine = fake_engine
     app_module.app.dependency_overrides[app_module.auth] = lambda: "tester"
+    # As rotas de consumo resolvem a identidade por `identidade` (token de
+    # servico OU sessao). Substituir so `auth` deixaria essas rotas em 401.
+    app_module.app.dependency_overrides[app_module.identidade] = lambda: "tester"
     app_module.LOGIN_FAILS.clear()
     c = TestClient(app_module.app, base_url="https://testserver")
     c.fake = fake_engine

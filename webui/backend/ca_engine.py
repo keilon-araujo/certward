@@ -65,7 +65,7 @@ class CAEngine(ABC):
     def cert_detail(self, serial: str) -> dict: ...
     @abstractmethod
     def issue(self, name: str, profile: str, sans: str, p12_password: str,
-              key_type: str = "ecdsa-p256") -> str: ...
+              key_type: str = "ecdsa-p256", csr_pem: str = "") -> str: ...
     @abstractmethod
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
               revoke_old: bool, reason: str, key_type: str = "ecdsa-p256") -> str: ...
@@ -256,19 +256,52 @@ class BashEngine(CAEngine):
 
     # ------------------------------------------------------------------ escrita
     def issue(self, name: str, profile: str, sans: str, p12_password: str,
-              key_type: str = "ecdsa-p256") -> str:
+              key_type: str = "ecdsa-p256", csr_pem: str = "") -> str:
         # p12_password: senha do PKCS#12 escolhida na emissao (a UI sugere 30
         # chars aleatorios; o usuario pode editar). Guardada cifrada e usada no
         # bundle. Se vazia, o download gera uma aleatoria.
+        #
+        # csr_pem: emissao POR CSR. Quando vem preenchido, a CA nao gera chave
+        # nenhuma — a privada fica com quem pediu. E o modo que uma plataforma
+        # externa usa, e o unico em que a promessa "a chave nao sai do seu
+        # servico" se sustenta.
         if not pki.ca_present():
             raise EngineError(409, "CA nao inicializada")
-        if not pki.WILDCARD_RE.match(name):
-            raise EngineError(400, "nome invalido (use letras, numeros, . _ - ; wildcard: *.dominio)")
         if profile not in pki.PROFILES:
             raise EngineError(400, "perfil invalido")
-        if key_type not in pki.KEY_TYPES:
+        if not pki.nome_valido(name, profile):
+            if profile == "server":
+                raise EngineError(400, "nome invalido para certificado de servidor "
+                                       "(use hostname ou *.dominio)")
+            raise EngineError(400, "nome invalido (pessoa: e-mail ou nome; "
+                                   "servidor: hostname ou *.dominio)")
+        if csr_pem:
+            if key_type and key_type != "ecdsa-p256":
+                # ecdsa-p256 e o default do modelo; so recusa escolha explicita
+                raise EngineError(400, "com CSR o tipo de chave vem do proprio "
+                                       "CSR; nao envie key_type")
+            if "BEGIN CERTIFICATE REQUEST" not in csr_pem:
+                raise EngineError(400, "csr nao parece um PEM de requisicao")
+        elif key_type not in pki.KEY_TYPES:
             raise EngineError(400, "tipo de chave invalido")
+
         with self._ca_lock():
+            if csr_pem:
+                with tempfile.NamedTemporaryFile("w", suffix=".csr", delete=False,
+                                                 dir="/tmp") as fh:
+                    fh.write(csr_pem)
+                    caminho = fh.name
+                try:
+                    log = self._run("new_cert.sh", ["--csr", caminho, name,
+                                                    profile, sans],
+                                    extra_env=self._int_env(), timeout=300)
+                finally:
+                    Path(caminho).unlink(missing_ok=True)
+                m = _SERIAL_RE.search(log)
+                serial = m.group(1) if m else ""
+                # Sem chave para proteger: nao ha .key. Guardar senha de PKCS#12
+                # tambem nao faz sentido — nao da para montar p12 sem a privada.
+                return log
             log = self._run("new_cert.sh", [name, profile, sans, key_type],
                             extra_env=self._int_env(), timeout=300)
             m = _SERIAL_RE.search(log)
