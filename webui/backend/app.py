@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import pki
+import svc_tokens
 from pki import EngineError
 from ca_engine import Download, get_engine
 
@@ -134,6 +135,56 @@ def _new_session(user: str) -> str:
     return f"{body}.{sig}"
 
 
+def _token_de_servico(request: Request):
+    """Le e valida o header X-API-Key, se houver. Devolve o registro ou None.
+
+    Nao levanta quando o header esta ausente: quem chama decide se a rota
+    aceita token. Levanta 401 quando o header existe mas nao presta — calar
+    nesse caso faria a chamada cair no fluxo de sessao e responder "sessao
+    invalida", mandando o operador procurar o problema no lugar errado.
+    """
+    bruto = request.headers.get("X-API-Key", "").strip()
+    if not bruto:
+        return None
+    try:
+        return svc_tokens.validar(bruto)
+    except svc_tokens.TokenError as exc:
+        raise HTTPException(401, str(exc))
+
+
+def identidade(request: Request) -> str:
+    """Quem esta chamando: token de servico OU sessao de administrador.
+
+    E um ponto UNICO e estavel de injecao. `exige_escopo()` monta uma funcao
+    nova a cada chamada; se a autenticacao morasse la dentro, nada conseguiria
+    substitui-la — nem `dependency_overrides`, nem um teste. Guarda o registro
+    do token em `request.state` para o escopo ser conferido depois.
+    """
+    reg = _token_de_servico(request)
+    if reg is not None:
+        request.state.svc_token = reg
+        return f"token:{reg['name']}"
+    request.state.svc_token = None
+    return auth(request)
+
+
+def exige_escopo(escopo: str):
+    """Dependencia para rotas que uma plataforma externa consome.
+
+    Aceita token de servico COM o escopo, ou sessao de administrador. As rotas
+    de administracao (setup, senha, gestao de tokens) usam `auth` direto — e e
+    por isso que nenhum token as alcanca.
+    """
+    def _dep(request: Request, quem: str = Depends(identidade)) -> str:
+        reg = getattr(request.state, "svc_token", None)
+        if reg is not None:
+            if escopo not in (reg.get("scopes") or []):
+                raise HTTPException(
+                    403, f"o token '{reg['name']}' nao tem o escopo '{escopo}'")
+        return quem
+    return _dep
+
+
 def auth(request: Request) -> str:
     """Dependencia: exige um token de sessao valido (cookie). Retorna o usuario."""
     tok = request.cookies.get(COOKIE) or ""
@@ -192,6 +243,10 @@ class IssueBody(BaseModel):
     sans: str = ""
     p12_password: str = ""
     key_type: str = "ecdsa-p256"
+    # Emissao por CSR: quando vem preenchido, a CA assina a requisicao e NAO
+    # gera chave. E como uma plataforma externa (ex.: CertaSync) emite sem que
+    # a chave privada exista aqui.
+    csr: str = ""
 
 
 class RevokeBody(BaseModel):
@@ -315,13 +370,60 @@ def setup(body: SetupBody, user: str = Depends(auth)):
 
 
 @app.get("/api/certs")
-def list_certs(_: str = Depends(auth)):
+def list_certs(_: str = Depends(exige_escopo("certs:read"))):
     return engine.list_certs()
 
 
 @app.get("/api/certs/{serial}")
-def cert_detail(serial: str, _: str = Depends(auth)):
+def cert_detail(serial: str, _: str = Depends(exige_escopo("certs:read"))):
     return engine.cert_detail(serial)
+
+
+class TokenBody(BaseModel):
+    name: str
+    scopes: list = []
+    expires_in_days: int = svc_tokens.VALIDADE_PADRAO_DIAS
+
+
+@app.get("/api/service-tokens")
+def listar_tokens(user: str = Depends(auth)):
+    """Lista os tokens. Nunca devolve o segredo — so o prefixo legivel."""
+    return {"tokens": svc_tokens.listar(),
+            "scopes": [{"scope": e, "description": svc_tokens.DESCRICAO[e]}
+                       for e in svc_tokens.ESCOPOS]}
+
+
+@app.post("/api/service-tokens")
+def criar_token(body: TokenBody, user: str = Depends(auth)):
+    """Cria um token. O segredo aparece nesta resposta e em nenhuma outra."""
+    try:
+        registro, token = svc_tokens.criar(body.name, body.scopes, user,
+                                           body.expires_in_days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit(user, "token-criar", f"{body.name} ({','.join(registro['scopes'])})")
+    return {**registro, "token": token,
+            "aviso": "Guarde agora — este valor nao sera exibido de novo."}
+
+
+@app.post("/api/service-tokens/{kid}/revoke")
+def revogar_token(kid: str, user: str = Depends(auth)):
+    try:
+        registro = svc_tokens.revogar(kid, user)
+    except KeyError:
+        raise HTTPException(404, "token nao encontrado")
+    audit(user, "token-revogar", f"{registro['name']} (id {kid})")
+    return registro
+
+
+@app.delete("/api/service-tokens/{kid}")
+def remover_token(kid: str, user: str = Depends(auth)):
+    try:
+        svc_tokens.remover(kid)
+    except KeyError:
+        raise HTTPException(404, "token nao encontrado")
+    audit(user, "token-remover", f"id {kid}")
+    return {"deleted": kid}
 
 
 @app.post("/api/decode")
@@ -330,14 +432,16 @@ def decode_pem(body: DecodeBody, _: str = Depends(auth)):
 
 
 @app.post("/api/certs")
-def issue(body: IssueBody, user: str = Depends(auth)):
-    log = engine.issue(body.name, body.profile, body.sans, body.p12_password, body.key_type)
-    audit(user, "emitir", f"{body.name} ({body.profile}, {body.key_type})")
-    return {"ok": True, "log": log}
+def issue(body: IssueBody, user: str = Depends(exige_escopo("certs:issue"))):
+    log = engine.issue(body.name, body.profile, body.sans, body.p12_password,
+                       body.key_type, body.csr)
+    origem = "por CSR" if body.csr else body.key_type
+    audit(user, "emitir", f"{body.name} ({body.profile}, {origem})")
+    return {"ok": True, "log": log, "from_csr": bool(body.csr)}
 
 
 @app.post("/api/certs/{serial}/revoke")
-def revoke(serial: str, body: RevokeBody, user: str = Depends(auth)):
+def revoke(serial: str, body: RevokeBody, user: str = Depends(exige_escopo("certs:revoke"))):
     log = engine.revoke(serial, body.reason)
     audit(user, "revogar", f"serial {serial} ({body.reason})")
     return {"ok": True, "log": log}
@@ -368,9 +472,22 @@ def dl_ca(artifact: str, _: str = Depends(auth)):
     return _respond(engine.ca_file(artifact))
 
 
+# Material que um token de servico pode baixar. `key` e `bundle` carregam a
+# CHAVE PRIVADA: um token de emissao que os alcancasse transformaria "emitir
+# certificado" em "extrair chave de qualquer certificado ja emitido". Ficam
+# exclusivos de sessao de administrador.
+KINDS_PUBLICOS = ("cert", "chain")
+
+
 @app.get("/api/certs/{serial}/download/{kind}")
-def dl_cert(serial: str, kind: str, user: str = Depends(auth)):
+def dl_cert(serial: str, kind: str, request: Request,
+            quem: str = Depends(exige_escopo("certs:read"))):
+    if getattr(request.state, "svc_token", None) is not None \
+            and kind not in KINDS_PUBLICOS:
+        raise HTTPException(
+            403, f"token de servico nao baixa '{kind}' (contem chave privada); "
+                 f"use a sessao de administrador")
     d = engine.download(serial, kind)
     if kind == "bundle":
-        audit(user, "bundle-zip", serial)
+        audit(quem, "bundle-zip", serial)
     return _respond(d)
