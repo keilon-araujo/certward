@@ -187,3 +187,53 @@ def test_token_baixa_cadeia_mas_nunca_a_chave(raw_client, monkeypatch):
         r = raw_client.get(f"/api/certs/1000/download/{kind}", headers=h)
         assert r.status_code == 403, kind
         assert "chave privada" in r.json()["detail"]
+
+
+def test_health_publica_a_validade_da_crl(raw_client, monkeypatch):
+    """Sem este bloco, a falha da regeneracao diaria so aparece quando a CRL
+    vence — e ai todo cliente recusa todos os certificados de uma vez."""
+    from datetime import datetime, timedelta, timezone
+    import pki
+    prox = (datetime.now(timezone.utc) + timedelta(days=12)).isoformat()
+    monkeypatch.setattr(pki, "crl_info", lambda: {
+        "last_update": "2026-08-01T00:00:00+00:00",
+        "next_update": prox, "revoked_count": 3})
+    d = raw_client.get("/api/health").json()
+    assert d["crl"]["vencida"] is False
+    assert 11 < d["crl"]["dias_restantes"] < 13
+    assert d["crl"]["revogados"] == 3
+
+
+def test_health_marca_crl_vencida(raw_client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import pki
+    prox = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    monkeypatch.setattr(pki, "crl_info", lambda: {
+        "last_update": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+        "next_update": prox, "revoked_count": 0})
+    d = raw_client.get("/api/health").json()
+    assert d["crl"]["vencida"] is True
+    assert d["crl"]["dias_restantes"] < 0
+
+
+def test_health_sem_ca_nao_quebra(raw_client, monkeypatch):
+    """CA nao inicializada: health continua respondendo."""
+    import pki
+    monkeypatch.setattr(pki, "crl_info", lambda: None)
+    d = raw_client.get("/api/health").json()
+    assert d["status"] == "ok" and d["crl"] is None
+
+
+def test_health_denuncia_regeneracao_parada(raw_client, monkeypatch):
+    """A validade so cai depois de muitas falhas seguidas. A idade da ultima
+    geracao denuncia a parada em dois dias, nao em vinte."""
+    from datetime import datetime, timedelta, timezone
+    import pki
+    agora = datetime.now(timezone.utc)
+    monkeypatch.setattr(pki, "crl_info", lambda: {
+        "last_update": (agora - timedelta(days=9)).isoformat(),
+        "next_update": (agora + timedelta(days=21)).isoformat(),
+        "revoked_count": 0})
+    d = raw_client.get("/api/health").json()["crl"]
+    assert d["vencida"] is False and d["dias_restantes"] > 20
+    assert 8.5 < d["gerada_ha_dias"] < 9.5    # aqui e que se ve o problema

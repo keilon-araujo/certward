@@ -578,8 +578,15 @@ const refreshAll = () => Promise.all([loadStatus(), loadCerts()]);
 function renderHeader() {
   const cfg = S.status && S.status.config;
   const bn = $("#brandname");
+  // O cabecalho leva o nome da ORGANIZACAO do cliente — e a CA dele. O nome do
+  // fornecedor (CertaSync) vive no rodape, discreto, junto da versao.
   if (bn) bn.textContent = cfg && cfg.org ? cfg.org + " · CA" : "Autoridade Certificadora";
   if (cfg && cfg.org) document.title = cfg.org + " — CA Console";
+  const rodape = $("#produto");
+  if (rodape && S.health) {
+    rodape.textContent = (S.health.produto || "CertaSync · CA interna")
+      + " v" + (S.health.version || "—");
+  }
   const loggedIn = !!(S.auth && S.auth.user);
   const rb = $("#refreshbtn"); if (rb) rb.style.display = loggedIn ? "" : "none";
   const uc = $("#userctl");
@@ -1872,6 +1879,9 @@ window.__caDemo = enableDemo;
 /* ---------------- boot ---------------- */
 if (new URLSearchParams(location.search).has("demo") || location.protocol === "file:") S.demo = true;
 async function boot() {
+  // /api/health e publica — funciona antes do login e com a sessao expirada,
+  // que e quando o operador mais precisa saber com o que esta falando.
+  api("/api/health").then((h) => { S.health = h; renderHeader(); }).catch(() => {});
   try {
     const me = await api("/api/me");
     S.auth = { user: me.user, checked: true };
@@ -1884,5 +1894,8 @@ async function boot() {
 }
 boot();
 </script>
+<footer style="padding:14px 18px;text-align:center;font-size:11px;color:var(--faint)">
+  <span id="produto">CertaSync · CA interna</span>
+</footer>
 </body>
 </html>

@@ -7,7 +7,7 @@ VOLUME  := docker_ca-data
 IMAGE   := certward:latest
 
 .DEFAULT_GOAL := help
-.PHONY: help up down clean rebuild logs ps issue revoke crl ls expiring shell backup restore reset-admin
+.PHONY: help up down clean rebuild logs ps issue revoke crl ls expiring shell backup backup-cron restore reset-admin
 
 help: ## Lista os alvos
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -59,6 +59,12 @@ backup: ## Backup CIFRADO do volume -> ./ca-backup.tgz.enc  (requer BACKUP_PASS=
 	docker run --rm -e BACKUP_PASS='$(BACKUP_PASS)' --entrypoint sh -v $(VOLUME):/ca:ro $(IMAGE) \
 	  -c 'tar czf - -C /ca . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_PASS' > ca-backup.tgz.enc
 	@echo "backup cifrado (AES-256) salvo em ./ca-backup.tgz.enc"
+
+backup-cron: ## Instala o backup diario verificado no cron (requer sudo)
+	@echo "1) crie a senha:  sudo install -d -m 700 /etc/certward && sudo sh -c 'openssl rand -base64 32 > /etc/certward/backup.pass' && sudo chmod 600 /etc/certward/backup.pass"
+	@echo "2) copie o script: sudo install -D -m 755 scripts/backup-agendado.sh /opt/certward/scripts/backup-agendado.sh"
+	@echo "3) agende:        sudo sh -c 'echo \"0 2 * * * root /opt/certward/scripts/backup-agendado.sh >> /var/log/ca-backup.log 2>&1\" > /etc/cron.d/certward-backup'"
+	@echo "4) TESTE O RESTORE em VM limpa — backup nao verificado nao conta."
 
 restore: ## Restaura ./ca-backup.tgz.enc para o volume (SOBRESCREVE tudo; requer BACKUP_PASS)
 	@test -n "$(BACKUP_PASS)" || { echo "Informe BACKUP_PASS=<senha usada no backup>"; exit 1; }
