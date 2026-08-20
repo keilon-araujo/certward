@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r /opt/ca-app/webui/backend/requirements.txt
 # O openssl.cnf operativo NAO e copiado: e o /ca/openssl.cnf renderizado do template.
 COPY scripts/openssl.cnf.tmpl /opt/ca-app/openssl.cnf.tmpl
 COPY scripts/*.sh /opt/ca-app/
+COPY VERSION /opt/ca-app/VERSION
 COPY webui /opt/ca-app/webui
 COPY docker/entrypoint-ocsp.sh docker/entrypoint-crl.sh docker/user-entrypoint.sh /opt/ca-app/docker/
 RUN chmod +x /opt/ca-app/*.sh /opt/ca-app/docker/*.sh

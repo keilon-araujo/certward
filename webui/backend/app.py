@@ -33,6 +33,23 @@ from ca_engine import Download, get_engine
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 
+# Nome comercial do fornecedor. NAO substitui o nome da organizacao do
+# cliente no cabecalho (que vem do assistente) — este e o produto, aquele e
+# quem o opera. Fonte unica da versao, como no CertaSync.
+PRODUTO = "CertaSync · CA interna"
+
+
+def _versao() -> str:
+    for cand in (Path("/opt/ca-app/VERSION"), Path(__file__).parent.parent.parent / "VERSION"):
+        try:
+            return cand.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+    return "0.0.0"
+
+
+VERSAO = _versao()
+
 ADMIN_USER = pki.read_secret("admin_user", "ADMIN_USER") or "admin"
 ADMIN_PASS = pki.read_secret("admin_pass", "ADMIN_PASS")   # Docker secret > *_FILE > env
 if not ADMIN_PASS:
@@ -286,7 +303,49 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "initialized": pki.ca_present()}
+    """Saude da CA. SEM autenticacao, de proposito: quem consome isto e a
+    plataforma que opera a CA, e o dado exposto (validade da CRL) ja e publico
+    — a propria CRL e servida por HTTP sem credencial.
+
+    O bloco `crl` existe porque a regeneracao diaria pode falhar em silencio
+    (passphrase ausente, disco cheio) e o efeito so aparece quando a CRL vence:
+    a partir dai TODO cliente que consulta revogacao recusa TODOS os
+    certificados desta CA de uma vez, validos inclusive. Nao e degradacao, e
+    parada total — e acontece sozinho, bastando o tempo passar. Publicando a
+    validade, a falha vira alarme antes de virar incidente."""
+    out = {"status": "ok", "initialized": pki.ca_present(), "version": VERSAO,
+           "produto": PRODUTO}
+    try:
+        info = pki.crl_info()
+    except Exception:
+        info = None
+    if info:
+        from datetime import datetime, timezone
+
+        def _idade(iso):
+            if not iso:
+                return None
+            dt = datetime.fromisoformat(iso)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (dt - datetime.now(timezone.utc)).total_seconds() / 86400
+
+        prox = info.get("next_update")
+        dias = _idade(prox)
+        gerada = _idade(info.get("last_update"))
+        out["crl"] = {
+            "next_update": prox,
+            "dias_restantes": round(dias, 2) if dias is not None else None,
+            "vencida": bool(dias is not None and dias <= 0),
+            # Sinal ADIANTADO: a validade so cai depois de muitas falhas
+            # seguidas (a regeneracao roda a cada 1/3 da validade). A idade da
+            # ultima geracao denuncia a parada em dois dias, nao em vinte.
+            "gerada_ha_dias": round(-gerada, 2) if gerada is not None else None,
+            "revogados": info.get("revoked_count"),
+        }
+    else:
+        out["crl"] = None
+    return out
 
 
 @app.get("/api/me")
