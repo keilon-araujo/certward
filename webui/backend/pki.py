@@ -57,6 +57,18 @@ WILDCARD_RE = re.compile(r"^(\*\.)?[A-Za-z0-9._-]{1,120}$")   # hostname ou wild
 PESSOA_RE = re.compile(r"^[A-Za-z0-9._%+\- ]{1,64}(@[A-Za-z0-9.-]{1,120})?$")
 
 
+def slug_valido(slug: str) -> bool:
+    """Nome de arquivo derivado de um CN que pode virar caminho com seguranca.
+
+    Aceita hostname/wildcard (NAME_RE) E identificador de pessoa (PESSOA_RE):
+    o download por serial recusava o CN de e-mail — a CA EMITIA o certificado
+    de pessoa e depois nao deixava baixar. Nenhuma das duas formas admite '/',
+    entao o slug nunca sai do diretorio onde e usado (sempre com sufixo).
+    """
+    slug = slug or ""
+    return bool(NAME_RE.match(slug) or PESSOA_RE.match(slug))
+
+
 def nome_valido(nome: str, profile: str) -> bool:
     """Valida o nome conforme o PROPOSITO do certificado.
 

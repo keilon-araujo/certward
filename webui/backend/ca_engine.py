@@ -330,8 +330,10 @@ class BashEngine(CAEngine):
             raise EngineError(400, "tipo de chave invalido")
         cn = pki.common_name(pki.load_cert(certpem))
         slug = pki.fname(cn)
-        if not pki.WILDCARD_RE.match(cn):
-            raise EngineError(400, "CN do certificado antigo invalido")
+        # Mesma regra da emissao: perfil client/dual aceita identificador de
+        # pessoa; server exige hostname.
+        if not pki.nome_valido(cn, profile):
+            raise EngineError(400, "CN do certificado antigo invalido para este perfil")
         if revoke_old and reason not in pki.REASONS:
             raise EngineError(400, "motivo invalido")
         with self._ca_lock():
@@ -382,7 +384,7 @@ class BashEngine(CAEngine):
         certpem = self._cert_pem(serial)
         cn = pki.common_name(pki.load_cert(certpem))
         slug = pki.fname(cn)
-        if not pki.NAME_RE.match(slug):
+        if not pki.slug_valido(slug):
             raise EngineError(400, "CN do certificado nao mapeavel para arquivo")
         if kind == "bundle":
             return self._bundle(serial, slug, cn)
