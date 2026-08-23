@@ -10,6 +10,20 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.0.1] — 2026-08-22
+
+### Corrigido
+
+- **Download de certificado de pessoa.** A CA emitia o certificado com CN de
+  e-mail (perfil `client`, desde a 1.0.0) e depois **recusava o download por
+  série** — `CN do certificado nao mapeavel para arquivo` —, porque a guarda do
+  nome de arquivo só aceitava hostname. Achado integrando o CertaSync no
+  laboratório em 22/08/2026: a emissão respondia "ok" e o cliente ficava sem o
+  certificado. `pki.slug_valido()` aceita hostname/wildcard **e** identificador
+  de pessoa (nenhum dos dois admite `/`, então o slug nunca sai do diretório).
+  A renovação passa a validar o CN antigo pela mesma regra da emissão
+  (`nome_valido(cn, profile)`), em vez de exigir hostname.
+
 ## [1.0.0] — 2026-08-19
 
 Primeira versão empacotada para entrega. O que já existia passa a ter versão,

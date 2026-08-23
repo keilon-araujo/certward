@@ -200,3 +200,15 @@ def test_p12pass_store_load():
     assert eng._load_p12pass("9999") is None                  # inexistente
     eng._store_p12pass("2001", "")                            # vazio nao guarda
     assert eng._load_p12pass("2001") is None
+
+
+def test_slug_valido_aceita_pessoa_e_recusa_caminho():
+    """O download por serial recusava CN de e-mail: a CA emitia o certificado
+    de pessoa e depois nao deixava baixar (achado no laboratorio, 22/08/2026)."""
+    assert pki.slug_valido(pki.fname("app.test.lab"))
+    assert pki.slug_valido(pki.fname("*.test.lab"))
+    assert pki.slug_valido("joao.silva@test.lab")
+    assert pki.slug_valido("Joao Silva")
+    assert not pki.slug_valido("../etc/passwd")
+    assert not pki.slug_valido("a/b")
+    assert not pki.slug_valido("")
