@@ -10,6 +10,20 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.1.0] — 2026-08-22
+
+### Alterado
+
+- **Identidade visual alinhada à marca CertaSync.** A apresentação deste
+  console (densidade, cantos, bordas) foi escolhida como direção para os dois
+  produtos e **não muda**; muda a identidade: acento azul da marca
+  (`#6BB4E8` no escuro, `#12507A` no claro) no lugar do âmbar, "ok" no teal
+  de certificado válido, superfícies derivadas de `#0E1418`/`#F5F7F8`, e
+  tipografia IBM Plex Sans / IBM Plex Mono / Space Grotesk (títulos) —
+  **servida pela própria CA** em `/fonts` (sem CDN). O símbolo do cabeçalho
+  passa a ser o "Anel de Renovação" do CertaSync. Lado a lado, CA e
+  plataforma deixam de parecer dois fornecedores.
+
 ## [1.0.1] — 2026-08-22
 
 ### Corrigido

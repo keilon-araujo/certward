@@ -24,6 +24,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import pki
@@ -294,6 +295,13 @@ class PwBody(BaseModel):
 
 
 # ---- rotas: app + auth ----------------------------------------------------
+# Fontes da marca servidas pela própria CA (webui/frontend/fonts/*.woff2) —
+# produto on-premises não carrega nada de CDN.
+_FONTS = FRONTEND.parent / "fonts"
+if _FONTS.is_dir():
+    app.mount("/fonts", StaticFiles(directory=str(_FONTS)), name="fonts")
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     if FRONTEND.exists():
