@@ -65,7 +65,8 @@ class CAEngine(ABC):
     def cert_detail(self, serial: str) -> dict: ...
     @abstractmethod
     def issue(self, name: str, profile: str, sans: str, p12_password: str,
-              key_type: str = "ecdsa-p256", csr_pem: str = "") -> str: ...
+              key_type: str = "ecdsa-p256", csr_pem: str = "",
+              substituir: bool = False) -> str: ...
     @abstractmethod
     def renew(self, serial: str, profile: str, sans: str, p12_password: str,
               revoke_old: bool, reason: str, key_type: str = "ecdsa-p256") -> str: ...
@@ -256,7 +257,18 @@ class BashEngine(CAEngine):
 
     # ------------------------------------------------------------------ escrita
     def issue(self, name: str, profile: str, sans: str, p12_password: str,
-              key_type: str = "ecdsa-p256", csr_pem: str = "") -> str:
+              key_type: str = "ecdsa-p256", csr_pem: str = "",
+              substituir: bool = False) -> str:
+        # substituir: RENOVACAO por CSR. O new_cert.sh recusa emitir um nome que
+        # ja tem certs/<nome>.crt — protecao certa para o operador na tela, mas
+        # fatal para quem renova por API: o CertaSync so sabe pedir "emita este
+        # CSR", e sem isto toda renovacao de nome existente morria em "Ja
+        # existe". Com o flag, os ARQUIVOS DE TRABALHO por-CN (crt/chain/csr/
+        # key) sao arquivados antes de emitir — exatamente o que renew() ja
+        # fazia. O certificado anterior NAO e revogado nem some: fica em
+        # newcerts/<serial>.pem, continua valido e baixavel por serie. Revogar o
+        # antigo e decisao de quem renovou, depois que o novo estiver servindo.
+        #
         # p12_password: senha do PKCS#12 escolhida na emissao (a UI sugere 30
         # chars aleatorios; o usuario pode editar). Guardada cifrada e usada no
         # bundle. Se vazia, o download gera uma aleatoria.
@@ -286,6 +298,7 @@ class BashEngine(CAEngine):
             raise EngineError(400, "tipo de chave invalido")
 
         with self._ca_lock():
+            anterior = self._arquivar_trabalho(name) if substituir else ""
             if csr_pem:
                 with tempfile.NamedTemporaryFile("w", suffix=".csr", delete=False,
                                                  dir="/tmp") as fh:
@@ -301,14 +314,36 @@ class BashEngine(CAEngine):
                 serial = m.group(1) if m else ""
                 # Sem chave para proteger: nao ha .key. Guardar senha de PKCS#12
                 # tambem nao faz sentido — nao da para montar p12 sem a privada.
-                return log
+                return anterior + log
             log = self._run("new_cert.sh", [name, profile, sans, key_type],
                             extra_env=self._int_env(), timeout=300)
             m = _SERIAL_RE.search(log)
             serial = m.group(1) if m else ""
             self._protect_key(serial, pki.fname(name))
             self._store_p12pass(serial, p12_password)
-        return log
+        return anterior + log
+
+    def _arquivar_trabalho(self, name: str) -> str:
+        """Tira do caminho os arquivos por-CN de um nome que vai ser reemitido.
+
+        Chamar SOB o lock da CA. Devolve uma linha de log com a serie anterior
+        (vazia se nao havia nada) — o chamador a prefixa ao log da emissao para
+        a auditoria dizer o que foi substituido. So os arquivos de trabalho
+        saem; newcerts/<serial>.pem e index.txt ficam intactos, entao o
+        certificado antigo continua valido, consultavel e baixavel por serie.
+        """
+        slug = pki.fname(name)
+        crt = pki.INT / "certs" / f"{slug}.crt"
+        if not crt.exists():
+            return ""
+        try:
+            serie = format(pki.load_cert(crt).serial_number, "X")
+        except Exception:
+            serie = "?"
+        for p in (crt, pki.INT / "certs" / f"{slug}.chain.crt",
+                  pki.INT / "private" / f"{slug}.key", pki.INT / "reqs" / f"{slug}.csr"):
+            p.unlink(missing_ok=True)
+        return f"==> Substituindo {slug} (serie anterior {serie} continua valida ate expirar ou ser revogada)\n"
 
     def revoke(self, serial: str, reason: str) -> str:
         if reason not in pki.REASONS:

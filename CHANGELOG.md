@@ -10,6 +10,24 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.1.1] — 2026-09-06
+
+### Corrigido
+
+- **Renovação por CSR de um nome que já tem certificado.** `new_cert.sh`
+  recusa emitir quando `certs/<nome>.crt` existe — proteção certa para o
+  operador na tela, mas fatal para quem renova pela API: o CertaSync só sabe
+  pedir "emita este CSR", e toda renovação de nome existente (certificado da
+  própria interface, renovação diária, campanha) morria em "Ja existe".
+  Achado no laboratório em 06/09/2026, ao reemitir o certificado da UI.
+  `POST /api/certs` aceita agora **`substituir: true`**: o motor arquiva os
+  arquivos de trabalho por nome (crt/chain/csr/key) **antes** de chamar o
+  script — o que `renew()` já fazia — e emite. A série anterior **não é
+  revogada nem some**: fica em `newcerts/<serial>.pem`, válida e baixável por
+  série, porque numa renovação o novo só passa a servir depois do deploy.
+  Sem o flag, nada muda (a tela continua recusando). O log e a auditoria
+  registram a série substituída. Testes em `test_engine_substituir.py`.
+
 ## [1.1.0] — 2026-08-22
 
 ### Alterado

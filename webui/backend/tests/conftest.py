@@ -46,9 +46,10 @@ class FakeEngine(CAEngine):
         return {"serial": "1000", "cn": "a.test.lab", "decoded": {"version": "v3"}, "pem": "PEM"}
 
     def issue(self, name, profile, sans, p12_password, key_type="ecdsa-p256",
-              csr_pem=""):
+              csr_pem="", substituir=False):
         self.calls.append(("issue", name, profile, key_type))
         self.calls.append(("issue_csr", name, bool(csr_pem)))
+        self.calls.append(("issue_substituir", name, bool(substituir)))
         return "[issue] ok (por CSR)" if csr_pem else "[issue] ok"
 
     def renew(self, serial, profile, sans, p12_password, revoke_old, reason, key_type="ecdsa-p256"):

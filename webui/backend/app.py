@@ -265,6 +265,10 @@ class IssueBody(BaseModel):
     # gera chave. E como uma plataforma externa (ex.: CertaSync) emite sem que
     # a chave privada exista aqui.
     csr: str = ""
+    # Renovacao: emite mesmo que ja exista certs/<nome>.crt, arquivando os
+    # arquivos de trabalho do anterior (que continua valido por serie). E o que
+    # o CertaSync manda ao renovar; na tela o padrao segue recusando.
+    substituir: bool = False
 
 
 class RevokeBody(BaseModel):
@@ -501,8 +505,10 @@ def decode_pem(body: DecodeBody, _: str = Depends(auth)):
 @app.post("/api/certs")
 def issue(body: IssueBody, user: str = Depends(exige_escopo("certs:issue"))):
     log = engine.issue(body.name, body.profile, body.sans, body.p12_password,
-                       body.key_type, body.csr)
+                       body.key_type, body.csr, body.substituir)
     origem = "por CSR" if body.csr else body.key_type
+    if body.substituir:
+        origem += ", substituindo o anterior"
     audit(user, "emitir", f"{body.name} ({body.profile}, {origem})")
     return {"ok": True, "log": log, "from_csr": bool(body.csr)}
 

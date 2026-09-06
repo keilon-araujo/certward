@@ -125,6 +125,19 @@ def test_issue_repassa_csr_ao_motor(client):
     assert ("issue_csr", "csr.test.lab", True) in client.fake.calls
 
 
+def test_issue_substituir_chega_ao_motor_e_e_falso_por_padrao(client):
+    """Renovacao por API: o flag precisa atravessar a rota; sem ele, a recusa
+    de nome existente continua valendo (e o que protege o operador na tela)."""
+    r = client.post("/api/certs", json={"name": "csr.test.lab", "profile": "server",
+                                        "key_type": "", "csr": CSR_FALSO,
+                                        "substituir": True})
+    assert r.status_code == 200
+    assert ("issue_substituir", "csr.test.lab", True) in client.fake.calls
+    r = client.post("/api/certs", json={"name": "csr2.test.lab", "profile": "server",
+                                        "key_type": "", "csr": CSR_FALSO})
+    assert ("issue_substituir", "csr2.test.lab", False) in client.fake.calls
+
+
 def test_issue_sem_csr_continua_gerando(client):
     """O caminho antigo nao pode ter regredido."""
     r = client.post("/api/certs", json={"name": "sem-csr.test.lab", "profile": "server"})
