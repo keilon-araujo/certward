@@ -10,6 +10,19 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.1.2] — 2026-09-06
+
+### Corrigido
+
+- **Revogação respondia erro depois de revogar.** `gen-crl.sh` copiava a CRL
+  nova por cima de `web/ca.crl`, que fica `444`; como a interface roda sem
+  root, o `cp` falhava com "Permission denied" **depois** de o índice já
+  estar revogado — a revogação valia, a API devolvia 400 e o cliente
+  (CertaSync) reportava "recusou o pedido" (achado E do teste de aceite,
+  06/09/2026). A publicação passa a ser por arquivo temporário + `mv -f`,
+  para a intermediária e para a raiz, o que também evita leitor pegar CRL
+  pela metade.
+
 ## [1.1.1] — 2026-09-06
 
 ### Corrigido
