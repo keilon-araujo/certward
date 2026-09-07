@@ -10,6 +10,18 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.1.3] — 2026-09-07
+
+### Adicionado
+
+- **Kit de entrega** (`kit/montar-kit.sh`): imagens `certward:<versão>` e
+  `certward-nginx:<versão>` para a plataforma do cliente, `docker save`,
+  `docker-compose.yml` com tag fixa e sem `build:` (portas 80/443 — a VM da
+  CA é dedicada; o 8081/8444 do laboratório era um override local),
+  `.env.example` e `SHA256SUMS`. Até aqui a CA só subia por `bootstrap.sh`,
+  que faz build a partir do fonte — o cliente não tem o fonte. A
+  documentação vai em pacote separado, não no kit.
+
 ## [1.1.2] — 2026-09-06
 
 ### Corrigido

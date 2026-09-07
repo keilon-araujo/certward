@@ -32,3 +32,6 @@ docs/_build.html
 
 # macOS
 .DS_Store
+
+# Kits de entrega (kit/montar-kit.sh)
+dist/
