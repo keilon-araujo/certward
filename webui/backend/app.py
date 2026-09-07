@@ -477,6 +477,22 @@ def criar_token(body: TokenBody, user: str = Depends(auth)):
             "aviso": "Guarde agora — este valor nao sera exibido de novo."}
 
 
+class BackupBody(BaseModel):
+    passphrase: str
+
+
+@app.post("/api/backup")
+def backup(body: BackupBody, user: str = Depends(auth)):
+    """Backup cifrado da CA para download — so sessao de administrador (nunca
+    token de servico: o arquivo tem as chaves). A senha nao fica em lugar
+    nenhum: quem baixa e responsavel por guarda-la junto com o arquivo."""
+    dados = engine.backup(body.passphrase)
+    nome = "ca-backup-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + ".tgz.enc"
+    audit(user, "backup", f"{nome} ({len(dados)} bytes, verificado)")
+    return Response(content=dados, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
 @app.post("/api/service-tokens/{kid}/revoke")
 def revogar_token(kid: str, user: str = Depends(auth)):
     try:

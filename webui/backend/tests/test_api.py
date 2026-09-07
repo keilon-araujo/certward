@@ -250,3 +250,15 @@ def test_health_denuncia_regeneracao_parada(raw_client, monkeypatch):
     d = raw_client.get("/api/health").json()["crl"]
     assert d["vencida"] is False and d["dias_restantes"] > 20
     assert 8.5 < d["gerada_ha_dias"] < 9.5    # aqui e que se ve o problema
+
+
+def test_backup_pela_ui_baixa_arquivo_cifrado(client):
+    """Backup sem terminal: a sessao pede, o motor cifra e verifica, o
+    navegador baixa. Senha curta e recusada antes de tocar no /ca."""
+    r = client.post("/api/backup", json={"passphrase": "senha-forte-de-teste"})
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].startswith('attachment; filename="ca-backup-')
+    assert r.content == b"ENCRYPTED-TGZ"
+    assert ("backup", len("senha-forte-de-teste")) in client.fake.calls
+    r = client.post("/api/backup", json={"passphrase": "curta"})
+    assert r.status_code == 400

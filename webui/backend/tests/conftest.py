@@ -60,6 +60,12 @@ class FakeEngine(CAEngine):
         self.calls.append(("revoke", serial, reason))
         return "[revoke] ok"
 
+    def backup(self, passphrase):
+        self.calls.append(("backup", len(passphrase)))
+        if len(passphrase) < 12:
+            raise EngineError(400, "passphrase curta")
+        return b"ENCRYPTED-TGZ"
+
     def regenerate_crl(self):
         self.calls.append(("crl",))
         return "[crl] ok"

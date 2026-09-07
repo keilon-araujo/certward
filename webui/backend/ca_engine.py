@@ -74,6 +74,10 @@ class CAEngine(ABC):
     def revoke(self, serial: str, reason: str) -> str: ...
     @abstractmethod
     def regenerate_crl(self) -> str: ...
+    def backup(self, passphrase: str) -> bytes:
+        """Backup cifrado do estado da CA (tar.gz + AES-256). Nao abstrato para
+        nao quebrar motores de teste que nao o implementam."""
+        raise NotImplementedError
     @abstractmethod
     def ocsp_status(self, serial: str) -> dict: ...
     @abstractmethod
@@ -390,6 +394,31 @@ class BashEngine(CAEngine):
     def regenerate_crl(self) -> str:
         with self._ca_lock():
             return self._run("gen-crl.sh", [], extra_env=self._int_env(), timeout=120)
+
+    def backup(self, passphrase: str) -> bytes:
+        """tar.gz de /ca cifrado com AES-256-CBC (PBKDF2), igual ao ops/backup.sh —
+        o mesmo openssl enc do restore. Sob o lock da CA, para nao empacotar um
+        index.txt no meio de uma emissao. VERIFICA antes de devolver: decifra e
+        le o tar; arquivo que nao abre nao sai daqui (backup que nao restaura
+        nao e backup)."""
+        if not passphrase or len(passphrase) < 12:
+            raise EngineError(400, "passphrase do backup precisa ter ao menos 12 caracteres")
+        env = {**os.environ, "BACKUP_PASS": passphrase}
+        with self._ca_lock():
+            tar = subprocess.run(["tar", "czf", "-", "-C", str(pki.CA_BASE), "."],
+                                 capture_output=True, timeout=300)
+            if tar.returncode != 0:
+                raise EngineError(500, "tar falhou: " + tar.stderr.decode(errors="replace")[-200:])
+            enc = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt",
+                                  "-pass", "env:BACKUP_PASS"],
+                                 input=tar.stdout, capture_output=True, env=env, timeout=300)
+        if enc.returncode != 0:
+            raise EngineError(500, "cifragem falhou: " + enc.stderr.decode(errors="replace")[-200:])
+        dec = subprocess.run(["sh", "-c", "openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASS | tar tz >/dev/null"],
+                             input=enc.stdout, capture_output=True, env=env, timeout=300)
+        if dec.returncode != 0:
+            raise EngineError(500, "o backup gerado nao decifra/nao abre — descartado")
+        return enc.stdout
 
     # ------------------------------------------------------------------ OCSP
     def ocsp_status(self, serial: str) -> dict:

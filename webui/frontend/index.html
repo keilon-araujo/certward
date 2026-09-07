@@ -509,6 +509,7 @@ const S = {
   audit: { rows: [], loading: false, error: null },
   tokens: { rows: [], scopes: [], loading: false, error: null },
   tokenNew: null, tokenRevoke: null,
+  backup: null,
   demo: false,
 };
 
@@ -754,6 +755,7 @@ function crlCard(crl) {
       + "<dt>Revogados</dt><dd>" + (crl.revoked_count ?? 0) + " certificado(s)</dd></dl></div>";
   }
   return '<div class="card"><div class="card-h"><h2>CRL</h2><span class="hspace" style="flex:1"></span>'
+    + '<button class="btn sm" data-act="backup" title="Backup cifrado da CA para download">' + SVG.key + " Backup</button>"
     + '<button class="btn sm" data-act="crl"' + (busy ? " disabled" : "") + ">"
     + (busy ? SVG.spin + " Regenerando…" : "Regenerar CRL") + "</button></div>"
     + '<div class="card-b">' + body
@@ -1111,7 +1113,7 @@ async function openDetail(serial) {
   finally { if (S.detail) { S.detail.loading = false; renderLayer(); } }
 }
 function closeLayer() {
-  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null; S.tokenNew = null; S.tokenRevoke = null;
+  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null; S.tokenNew = null; S.tokenRevoke = null; S.backup = null;
   $("#layer").innerHTML = "";
   document.body.style.overflow = "";
   if (lastFocused && document.contains(lastFocused)) lastFocused.focus({ preventScroll: true });
@@ -1119,12 +1121,12 @@ function closeLayer() {
 }
 function renderLayer() {
   const L = $("#layer");
-  if (!S.detail && !S.revoke && !S.changepw && !S.renew && !S.tokenNew && !S.tokenRevoke) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
+  if (!S.detail && !S.revoke && !S.changepw && !S.renew && !S.tokenNew && !S.tokenRevoke && !S.backup) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
   if (!lastFocused) lastFocused = document.activeElement;
   document.body.style.overflow = "hidden";
   L.innerHTML = '<div class="scrim" data-act="close"></div>'
     + (S.changepw ? changePwModal() : S.renew ? renewModal() : S.revoke ? revokeModal()
-      : S.tokenNew ? tokenNewModal() : S.tokenRevoke ? tokenRevokeModal() : detailDrawer());
+      : S.tokenNew ? tokenNewModal() : S.tokenRevoke ? tokenRevokeModal() : S.backup ? backupModal() : detailDrawer());
   const box = L.querySelector(".drawer,.modal");
   const first = box.querySelector("select,input,button:not([disabled])");
   (first || box).focus({ preventScroll: true });
@@ -1620,6 +1622,51 @@ async function doRevokeToken() {
   } catch (e) { S.busy.token = false; toast("err", "Falha ao revogar", e.detail || e.message); renderLayer(); }
 }
 
+/* ---------------- backup pela UI ---------------- */
+// O contêiner da interface monta /ca e tem openssl: o backup é gerado e
+// VERIFICADO lá dentro e baixado pelo navegador — sem docker nem terminal.
+// A senha não fica em lugar nenhum; quem baixa guarda senha e arquivo juntos,
+// fora desta VM. O agendado (cron, ops/backup-agendado.sh) continua sendo o
+// caminho para o backup diário — este é o manual antes de operação de risco.
+function backupModal() {
+  const b = S.backup, busy = !!S.busy.backup, dis = busy ? " disabled" : "";
+  return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="bkt" tabindex="-1">'
+    + '<div class="modal-h"><div class="sec-title">Backup da CA</div><h2 id="bkt" style="font-size:16px">Gerar e baixar backup cifrado</h2></div>'
+    + '<div class="modal-b">'
+    + (b.error ? '<div class="err">' + esc(b.error) + "</div>" : "")
+    + '<div class="note warn">' + SVG.alert + "<div><b>A senha não é guardada.</b> Sem ela o arquivo é inútil — guarde os dois juntos, <b>fora desta VM</b>. "
+    + "O backup leva raiz, intermediária, índice, CRL e tokens (AES-256, verificado antes de baixar).</div></div>"
+    + '<div class="field"><label for="bk-pass">Senha do backup <span class="hint">(mín. 12)</span></label><input id="bk-pass" type="password" autocomplete="new-password"' + dis + "></div>"
+    + '<div class="field"><label for="bk-pass2">Confirmar senha</label><input id="bk-pass2" type="password" autocomplete="new-password"' + dis + "></div>"
+    + "</div>"
+    + '<div class="modal-f"><button class="btn" data-act="close"' + dis + ">Cancelar</button>"
+    + '<button class="btn primary" data-act="doBackup"' + dis + ">" + (busy ? SVG.spin + " Gerando…" : "Gerar e baixar") + "</button></div></div>";
+}
+async function doBackup() {
+  const b = S.backup; if (!b) return;
+  const p1 = ($("#bk-pass") || {}).value || "", p2 = ($("#bk-pass2") || {}).value || "";
+  b.error = null;
+  if (p1.length < 12) { b.error = "A senha precisa ter ao menos 12 caracteres."; renderLayer(); return; }
+  if (p1 !== p2) { b.error = "As senhas não conferem."; renderLayer(); return; }
+  S.busy.backup = true; renderLayer();
+  try {
+    let blob, nome = "ca-backup.tgz.enc";
+    if (S.demo) { blob = new Blob(["demo"]); }
+    else {
+      const res = await fetch("/api/backup", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passphrase: p1 }), credentials: "same-origin" });
+      if (res.status === 401) { S.auth.user = null; throw new ApiError(401, "Sessão expirada. Entre novamente."); }
+      if (!res.ok) { let d = ""; try { d = (await res.json()).detail; } catch (_) {} throw new ApiError(res.status, d || ("HTTP " + res.status)); }
+      const cd = res.headers.get("content-disposition") || ""; const m = cd.match(/filename="?([^";]+)"?/); if (m) nome = m[1];
+      blob = await res.blob();
+    }
+    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = nome;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+    S.busy.backup = false; S.backup = null; closeLayer();
+    toast("ok", "Backup gerado e verificado", nome + " — copie para fora desta VM e guarde a senha.");
+  } catch (e) { S.busy.backup = false; b.error = e.detail || e.message; renderLayer(); }
+}
+
 /* ---------------- renovação ---------------- */
 function renewModal() {
   const r = S.renew, busy = !!S.busy.renew;
@@ -1779,6 +1826,8 @@ document.addEventListener("click", (ev) => {
     else if (a === "newToken") { S.tokenNew = { name: "certasync", scopes: ["certs:issue", "certs:read"], days: 365, error: null, created: null }; renderLayer(); }
     else if (a === "doCreateToken") doCreateToken();
     else if (a === "doRevokeToken") doRevokeToken();
+    else if (a === "backup") { S.backup = { error: null }; renderLayer(); }
+    else if (a === "doBackup") doBackup();
     else if (a === "genp12" || a === "genrnp12") {
       // regenera a senha sugerida sem re-render (preserva os outros campos)
       const id = a === "genp12" ? "#f-p12" : "#rn-p12";

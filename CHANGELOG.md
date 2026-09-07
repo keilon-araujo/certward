@@ -10,6 +10,20 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.3.0] — 2026-09-07
+
+### Adicionado
+
+- **Backup pela interface.** Dashboard → cartão CRL → **Backup**: pede uma
+  senha (mín. 12), gera `tar.gz` de `/ca` cifrado com AES-256 (PBKDF2, o
+  mesmo formato do `ops/backup.sh`/`restore.sh`), **verifica** decifrando e
+  lendo o tar, e devolve para download (`ca-backup-<data>.tgz.enc`). Só
+  sessão de administrador — token de serviço não alcança, porque o arquivo
+  contém as chaves. Sob o lock da CA, para não empacotar o índice no meio de
+  uma emissão. A senha não é guardada. Auditado. O backup **diário**
+  continua pelo cron (`ops/backup-agendado.sh`), que também copia para fora
+  da VM.
+
 ## [1.2.0] — 2026-09-07
 
 ### Adicionado
