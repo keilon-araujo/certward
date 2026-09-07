@@ -10,6 +10,18 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.2.0] — 2026-09-07
+
+### Adicionado
+
+- **Aba "Tokens" no console.** Criar (nome, escopos, validade), ver o
+  segredo **uma única vez** com botão de copiar, listar (prefixo, escopos,
+  criado por/em, expira, último uso, status) e revogar com confirmação. A
+  API já existia (`/api/service-tokens`); faltava a tela — o runbook mandava
+  "console → Tokens de serviço" e o ensaio de instalação do zero mostrou que
+  ela não existia. O `ops/criar-token.sh` do kit continua como alternativa
+  para automação.
+
 ## [1.1.4] — 2026-09-07
 
 ### Adicionado

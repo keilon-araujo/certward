@@ -507,6 +507,8 @@ const S = {
   renew: null, renewError: null,
   decodePem: "", decodeResult: null, decodeError: null,
   audit: { rows: [], loading: false, error: null },
+  tokens: { rows: [], scopes: [], loading: false, error: null },
+  tokenNew: null, tokenRevoke: null,
   demo: false,
 };
 
@@ -627,6 +629,7 @@ const TABS = [
   { id: "issue", label: "Emitir" },
   { id: "decode", label: "Consultar" },
   { id: "audit", label: "Auditoria" },
+  { id: "tokens", label: "Tokens" },
   { id: "ca", label: "CA / Init" },
 ];
 function renderTabs() {
@@ -1086,7 +1089,8 @@ function render() {
     : S.view === "certs" ? viewCerts()
       : S.view === "issue" ? viewIssue()
         : S.view === "decode" ? viewDecode()
-          : S.view === "audit" ? viewAudit() : viewCa();
+          : S.view === "audit" ? viewAudit()
+            : S.view === "tokens" ? viewTokens() : viewCa();
   if (S.demo && !$("#demoflag")) {
     document.body.appendChild(el('<div id="demoflag" style="position:fixed;left:12px;bottom:12px;z-index:70;font:600 11px var(--mono);'
       + 'padding:5px 9px;border-radius:99px;background:var(--warn-soft);color:var(--warn);border:1px solid currentColor">MODO DEMONSTRAÇÃO</div>'));
@@ -1107,7 +1111,7 @@ async function openDetail(serial) {
   finally { if (S.detail) { S.detail.loading = false; renderLayer(); } }
 }
 function closeLayer() {
-  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null;
+  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null; S.tokenNew = null; S.tokenRevoke = null;
   $("#layer").innerHTML = "";
   document.body.style.overflow = "";
   if (lastFocused && document.contains(lastFocused)) lastFocused.focus({ preventScroll: true });
@@ -1115,11 +1119,12 @@ function closeLayer() {
 }
 function renderLayer() {
   const L = $("#layer");
-  if (!S.detail && !S.revoke && !S.changepw && !S.renew) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
+  if (!S.detail && !S.revoke && !S.changepw && !S.renew && !S.tokenNew && !S.tokenRevoke) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
   if (!lastFocused) lastFocused = document.activeElement;
   document.body.style.overflow = "hidden";
   L.innerHTML = '<div class="scrim" data-act="close"></div>'
-    + (S.changepw ? changePwModal() : S.renew ? renewModal() : S.revoke ? revokeModal() : detailDrawer());
+    + (S.changepw ? changePwModal() : S.renew ? renewModal() : S.revoke ? revokeModal()
+      : S.tokenNew ? tokenNewModal() : S.tokenRevoke ? tokenRevokeModal() : detailDrawer());
   const box = L.querySelector(".drawer,.modal");
   const first = box.querySelector("select,input,button:not([disabled])");
   (first || box).focus({ preventScroll: true });
@@ -1498,6 +1503,123 @@ function viewAudit() {
   return html + "</div>";
 }
 
+/* ---------------- tokens de serviço ---------------- */
+// Quem emite pelo CertaSync não tem sessão aqui: fala com a CA por um token
+// de serviço com escopo. Até a 1.1.x isto só existia na API (o runbook mandava
+// "console → Tokens de serviço" e a tela não existia — achado do ensaio de
+// instalação do zero em 07/09/2026).
+async function loadTokens() {
+  S.tokens.loading = true; S.tokens.error = null; render();
+  try {
+    const d = (await api("/api/service-tokens")) || {};
+    S.tokens.rows = d.tokens || []; S.tokens.scopes = d.scopes || [];
+  } catch (e) { S.tokens.error = e; S.tokens.rows = []; }
+  finally { S.tokens.loading = false; render(); }
+}
+function tokenStatus(r) {
+  if (!r.active) return { cls: "danger", label: "revogado" };
+  if (r.expirado) return { cls: "warn", label: "expirado" };
+  return { cls: "ok", label: "ativo" };
+}
+function viewTokens() {
+  if (S.tokens.error) return apiErrorCard(S.tokens.error, "reloadTokens");
+  const rows = S.tokens.rows;
+  let html = '<div class="card"><div class="toolbar">'
+    + '<span style="font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600">Tokens de serviço</span>'
+    + '<span style="font-size:12.5px;color:var(--muted)">' + rows.length + " token(s)</span>"
+    + '<span class="hspace" style="flex:1"></span>'
+    + '<button class="btn sm" data-act="reloadTokens">Atualizar</button>'
+    + '<button class="btn sm primary" data-act="newToken">Novo token</button></div>';
+  html += '<div class="card-b" style="padding-bottom:0"><div class="note">' + SVG.key
+    + "<div>É com um token de serviço que o <b>CertaSync</b> emite por CSR nesta CA. O segredo aparece <b>uma única vez</b>, na criação; "
+    + "aqui fica só o prefixo. <code>certs:issue</code> não implica <code>certs:revoke</code>.</div></div></div>";
+  if (S.tokens.loading && !rows.length) {
+    html += '<div class="card-b stack">' + Array.from({ length: 3 }, () => '<div class="skel" style="height:30px"></div>').join("") + "</div>";
+  } else if (!rows.length) {
+    html += '<div class="empty"><div class="ic">' + SVG.key + "</div><h3>Nenhum token ainda</h3><p>Crie um para o CertaSync com os escopos <code>certs:issue</code> e <code>certs:read</code>.</p>"
+      + '<div style="margin-top:10px"><button class="btn primary" data-act="newToken">Novo token</button></div></div>';
+  } else {
+    html += '<div class="tablewrap"><table><thead><tr><th>Nome</th><th>Prefixo</th><th>Escopos</th><th>Criado</th><th>Expira</th><th>Último uso</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const r of rows) {
+      const st = tokenStatus(r);
+      html += "<tr><td><b>" + esc(r.name || "—") + "</b></td><td class=\"mono\">" + esc(r.prefix || "") + "…</td>"
+        + "<td>" + (r.scopes || []).map((x) => '<span class="badge">' + esc(x) + "</span>").join(" ") + "</td>"
+        + "<td>" + fmtDate(r.created_at) + '<div style="font-size:11.5px;color:var(--muted)">' + esc(r.created_by || "") + "</div></td>"
+        + "<td>" + fmtDate(r.expires_at) + "</td><td>" + (r.last_used_at ? fmtDate(r.last_used_at) : "—") + "</td>"
+        + '<td><span class="badge ' + st.cls + '">' + st.label + "</span></td>"
+        + "<td>" + (r.active ? '<button class="btn sm danger" data-token-revoke="' + esc(r.id) + '">' + SVG.ban + " Revogar</button>" : "") + "</td></tr>";
+    }
+    html += "</tbody></table></div>";
+  }
+  return html + "</div>";
+}
+function tokenNewModal() {
+  const t = S.tokenNew, busy = !!S.busy.token;
+  const dis = busy ? " disabled" : "";
+  if (t.created) {
+    return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="tkt" tabindex="-1">'
+      + '<div class="modal-h"><div class="sec-title">Token criado</div><h2 id="tkt" style="font-size:16px">' + esc(t.created.name) + "</h2></div>"
+      + '<div class="modal-b">'
+      + '<div class="note warn">' + SVG.alert + "<div><b>Guarde agora.</b> Este valor não será exibido de novo — a CA guarda só um resumo dele. Cole em <i>Autoridades → CA local → Token de serviço</i> no CertaSync.</div></div>"
+      + '<div class="field"><label>Token</label><div style="display:flex;gap:8px;align-items:stretch">'
+      + '<input class="mono" type="text" readonly value="' + esc(t.created.token) + '" style="flex:1" onclick="this.select()">'
+      + copyBtn(t.created.token, "Copiar token") + "</div></div>"
+      + "<dl><dt>Escopos</dt><dd>" + (t.created.scopes || []).map((x) => '<span class="badge">' + esc(x) + "</span>").join(" ") + "</dd>"
+      + "<dt>Expira</dt><dd>" + fmtDate(t.created.expires_at) + "</dd></dl></div>"
+      + '<div class="modal-f"><button class="btn primary" data-act="close">Já guardei</button></div></div>';
+  }
+  const scopes = S.tokens.scopes.length ? S.tokens.scopes
+    : [{ scope: "certs:issue", description: "Emitir certificado (somente por CSR)" }, { scope: "certs:read", description: "Consultar e baixar" }, { scope: "certs:revoke", description: "Revogar" }];
+  return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="tkt" tabindex="-1">'
+    + '<div class="modal-h"><div class="sec-title">Tokens de serviço</div><h2 id="tkt" style="font-size:16px">Novo token</h2></div>'
+    + '<div class="modal-b">'
+    + (t.error ? '<div class="err">' + esc(t.error) + "</div>" : "")
+    + '<div class="field"><label for="tk-name">Nome <span class="hint">(quem usa — ex.: certasync)</span></label><input id="tk-name" class="mono" value="' + esc(t.name) + '"' + dis + "></div>"
+    + "<fieldset><legend>Escopos</legend><div class=\"stack\">"
+    + scopes.map((sc) => '<label class="radio"><input type="checkbox" name="tk-scope" value="' + esc(sc.scope) + '"'
+      + (t.scopes.includes(sc.scope) ? " checked" : "") + dis + "><span><b>" + esc(sc.scope) + "</b><small>" + esc(sc.description || "") + "</small></span></label>").join("")
+    + "</div></fieldset>"
+    + '<div class="field"><label for="tk-days">Validade (dias)</label><input id="tk-days" class="mono" type="number" min="1" max="3650" value="' + esc(String(t.days)) + '"' + dis + "></div>"
+    + "</div>"
+    + '<div class="modal-f"><button class="btn" data-act="close"' + dis + ">Cancelar</button>"
+    + '<button class="btn primary" data-act="doCreateToken"' + dis + ">" + (busy ? SVG.spin + " Criando…" : "Criar token") + "</button></div></div>";
+}
+async function doCreateToken() {
+  const t = S.tokenNew; if (!t) return;
+  t.name = (($("#tk-name") || {}).value || "").trim();
+  t.scopes = Array.from(document.querySelectorAll('input[name="tk-scope"]:checked')).map((i) => i.value);
+  t.days = parseInt(($("#tk-days") || {}).value || "365", 10) || 365;
+  t.error = null;
+  if (!t.name) { t.error = "Informe o nome."; renderLayer(); return; }
+  if (!t.scopes.length) { t.error = "Escolha ao menos um escopo."; renderLayer(); return; }
+  S.busy.token = true; renderLayer();
+  try {
+    t.created = await api("/api/service-tokens", { method: "POST", body: { name: t.name, scopes: t.scopes, expires_in_days: t.days } });
+    toast("ok", "Token criado", t.name + " — copie o segredo agora.");
+    loadTokens();
+  } catch (e) { t.error = e.detail || e.message; }
+  finally { S.busy.token = false; renderLayer(); }
+}
+function tokenRevokeModal() {
+  const r = S.tokenRevoke, busy = !!S.busy.token;
+  return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="trt" tabindex="-1">'
+    + '<div class="modal-h"><div class="sec-title">Ação irreversível</div><h2 id="trt" style="font-size:16px">Revogar token</h2></div>'
+    + '<div class="modal-b"><div class="note warn">' + SVG.alert + "<div><b>" + esc(r.name) + "</b> (<code>" + esc(r.prefix) + "…</code>) deixa de ser aceito imediatamente. "
+    + "O CertaSync que o usa para de emitir até receber outro.</div></div></div>"
+    + '<div class="modal-f"><button class="btn" data-act="close"' + (busy ? " disabled" : "") + ">Cancelar</button>"
+    + '<button class="btn danger" data-act="doRevokeToken"' + (busy ? " disabled" : "") + ">" + (busy ? SVG.spin + " Revogando…" : "Revogar") + "</button></div></div>";
+}
+async function doRevokeToken() {
+  const r = S.tokenRevoke; if (!r) return;
+  S.busy.token = true; renderLayer();
+  try {
+    await api("/api/service-tokens/" + encodeURIComponent(r.id) + "/revoke", { method: "POST" });
+    S.busy.token = false; S.tokenRevoke = null; closeLayer();
+    toast("ok", "Token revogado", r.name);
+    loadTokens();
+  } catch (e) { S.busy.token = false; toast("err", "Falha ao revogar", e.detail || e.message); renderLayer(); }
+}
+
 /* ---------------- renovação ---------------- */
 function renewModal() {
   const r = S.renew, busy = !!S.busy.renew;
@@ -1596,9 +1718,12 @@ document.addEventListener("click", (ev) => {
   const tab = t.closest("[data-tab]");
   if (tab) {
     S.view = tab.dataset.tab; const e = $("#errlog"); if (e) e.remove();
-    if (S.view === "audit") loadAudit(); else render();
+    if (S.view === "audit") loadAudit(); else if (S.view === "tokens") loadTokens(); else render();
     window.scrollTo({ top: 0 }); return;
   }
+  const trv = t.closest("[data-token-revoke]");
+  if (trv) { const id = trv.dataset.tokenRevoke; const row = S.tokens.rows.find((x) => x.id === id);
+    S.tokenRevoke = { id, name: row ? row.name : id, prefix: row ? row.prefix : "" }; renderLayer(); return; }
   const rv = t.closest("[data-revoke]");
   if (rv) {
     ev.preventDefault(); ev.stopPropagation();
@@ -1650,6 +1775,10 @@ document.addEventListener("click", (ev) => {
     else if (a === "doChangePw") doChangePw();
     else if (a === "doRenew") doRenew();
     else if (a === "reloadAudit") loadAudit();
+    else if (a === "reloadTokens") loadTokens();
+    else if (a === "newToken") { S.tokenNew = { name: "certasync", scopes: ["certs:issue", "certs:read"], days: 365, error: null, created: null }; renderLayer(); }
+    else if (a === "doCreateToken") doCreateToken();
+    else if (a === "doRevokeToken") doRevokeToken();
     else if (a === "genp12" || a === "genrnp12") {
       // regenera a senha sugerida sem re-render (preserva os outros campos)
       const id = a === "genp12" ? "#f-p12" : "#rn-p12";
@@ -1772,6 +1901,9 @@ const DEMO = {
     if (path === "/api/me") return { user: "demo" };
     if (path === "/api/login") return { ok: true, user: "demo" };
     if (path === "/api/logout") return { ok: true };
+    if (path === "/api/service-tokens" && method === "GET") return { tokens: s.tokens || [], scopes: [{ scope: "certs:issue", description: "Emitir certificado (somente por CSR)" }, { scope: "certs:read", description: "Consultar e baixar" }, { scope: "certs:revoke", description: "Revogar" }] };
+    if (path === "/api/service-tokens" && method === "POST") { const id = Math.random().toString(16).slice(2, 10); const reg = { id, name: body.name, prefix: "cwt_" + id, scopes: body.scopes, created_at: new Date().toISOString(), created_by: "demo", expires_at: new Date(Date.now() + 864e5 * (body.expires_in_days || 365)).toISOString(), last_used_at: null, active: true, expirado: false }; (s.tokens = s.tokens || []).push(reg); return { ...reg, token: "cwt_" + id + "_" + Math.random().toString(36).slice(2) }; }
+    if (/^\/api\/service-tokens\/[^/]+\/revoke$/.test(path)) { const id = path.split("/")[3]; const reg = (s.tokens || []).find((x) => x.id === id); if (reg) reg.active = false; return reg || {}; }
     if (path === "/api/change-password") return { ok: true };
     if (path === "/api/health") return { status: "ok" };
     if (path === "/api/audit") return [
