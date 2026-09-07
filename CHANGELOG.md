@@ -10,6 +10,18 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.1.4] — 2026-09-07
+
+### Adicionado
+
+- **`ops/` no kit** — `backup.sh`, `restore.sh`, `backup-agendado.sh` e
+  `criar-token.sh`, com o nome do volume (`certward_ca-data`) e a tag da
+  imagem do kit já resolvidos. O ensaio de instalação do zero numa VM limpa
+  mostrou que o runbook mandava `make backup` e apontava `scripts/`, que só
+  existem no repositório — o cliente não tem nenhum dos dois. E o console
+  **não tem tela de tokens de serviço** (só a API, que exige sessão):
+  `criar-token.sh` faz login e cria o token; a tela fica para a 1.2.
+
 ## [1.1.3] — 2026-09-07
 
 ### Adicionado

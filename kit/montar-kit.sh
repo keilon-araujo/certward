@@ -13,6 +13,7 @@
 #   certward-<versao>-images.tar.gz   certward:<V> + certward-nginx:<V> (docker load -i)
 #   docker-compose.yml                image: fixo na tag, sem bloco build:; portas 80/443
 #   .env.example                      copiar para .env e definir ADMIN_PASS
+#   ops/                              backup.sh, restore.sh, backup-agendado.sh, criar-token.sh
 #   SHA256SUMS                        digest de tudo (informe ao cliente)
 #
 # Portas: 80 (ca./ocsp. — CRL, AIA e OCSP; NAO pode mudar, as URLs vao gravadas
@@ -58,6 +59,12 @@ awk -v v="$V" '
 grep -q "build:" "$SAIDA/docker-compose.yml" && { echo "compose ainda tem build:" >&2; exit 1; }
 grep -q "certward:$V" "$SAIDA/docker-compose.yml" || { echo "compose sem a tag $V" >&2; exit 1; }
 cp "$RAIZ/docker/.env.example" "$SAIDA/.env.example"
+# Operacao: backup/restore/token — o cliente nao tem o Makefile nem scripts/.
+mkdir -p "$SAIDA/ops"
+for f in backup.sh restore.sh criar-token.sh; do
+  sed "s/__VERSAO__/$V/g" "$RAIZ/kit/ops/$f" > "$SAIDA/ops/$f"; chmod +x "$SAIDA/ops/$f"
+done
+sed "s/certward:latest/certward:$V/; s/docker_ca-data/certward_ca-data/" "$RAIZ/scripts/backup-agendado.sh" > "$SAIDA/ops/backup-agendado.sh"; chmod +x "$SAIDA/ops/backup-agendado.sh"
 
 # 3. Digests -----------------------------------------------------------------
 ( cd "$SAIDA" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | xargs shasum -a 256 | sed 's| \./| |' > SHA256SUMS )
