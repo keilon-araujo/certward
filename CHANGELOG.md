@@ -10,6 +10,23 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.3.1] — 2026-09-07
+
+### Corrigido
+
+- **O nginx podia ficar servindo o certificado provisório para sempre.** O
+  vigia do certificado do host `admin.` corria em paralelo com a partida do
+  nginx: copiava o certificado emitido pela CA enquanto o nginx já lia o
+  provisório (`ca-admin-setup-pending`), chamava `nginx -s reload` antes de
+  existir um mestre para recarregar, engolia a falha e nunca repetia. Quem
+  ligava a verificação TLS no CertaSync recebia "cadeia da CA local não é
+  confiável" — a cadeia estava certa; o servidor é que apresentava o cert
+  errado. Achado no ensaio de instalação do zero em 07/09/2026 (o lab estava
+  no mesmo estado, e a prova anterior passou por sorte na ordem dos eventos).
+  Agora o certificado é aplicado **antes** de o nginx subir, e o vigia só o
+  dá por aplicado depois de um reload bem-sucedido. Contorno em instalação
+  antiga: `docker compose exec nginx nginx -s reload`.
+
 ## [1.3.0] — 2026-09-07
 
 ### Adicionado
