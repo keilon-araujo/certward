@@ -10,6 +10,15 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.3.3] — 2026-09-08
+
+### Corrigido
+
+- **"Copiar PEM" copiava a URL, não o certificado.** O botão reusava o
+  atributo genérico de cópia do console, que copia o texto do atributo. Agora
+  o cartão abre um pop-up com o PEM visível (quantos certificados contém e
+  onde colar), e os botões **Copiar PEM** e **Baixar** ficam dentro dele.
+
 ## [1.3.2] — 2026-09-08
 
 ### Adicionado

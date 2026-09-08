@@ -327,6 +327,7 @@ pre.pem{
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;align-items:start}
 .dlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
 .dlwrap{display:flex;flex-direction:column;gap:6px}
+.pem-box{max-height:48vh;overflow:auto;white-space:pre;font-size:.78em;line-height:1.35;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface-2);user-select:all}
 .dlcopy{align-self:flex-start;font:inherit;font-size:.8em;padding:4px 10px;border-radius:var(--r-sm);border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);cursor:pointer}
 .dlcopy:hover{border-color:var(--accent);color:var(--accent)}
 .dlcard{
@@ -769,26 +770,46 @@ function dlCard(href, name, desc) {
   // .crt é PEM: além de baixar, dá para COPIAR o texto — é o que o CertaSync
   // pede colado no campo "CA de confiança" (pedido de 07/09/2026). CRL é DER.
   const copiar = /\.crt$/.test(name)
-    ? '<button type="button" class="dlcopy" data-copy="' + esc(href) + '" title="Copiar o PEM para a área de transferência">Copiar PEM</button>'
+    ? '<button type="button" class="dlcopy" data-pem="' + esc(href) + '" data-pem-name="' + esc(name) + '" data-pem-desc="' + esc(desc) + '" title="Ver o PEM e copiar">Ver / copiar PEM</button>'
     : "";
   return '<div class="dlwrap"><a class="dlcard" href="' + esc(href) + '" data-dl="1" download><span class="dlic">' + SVG.dl
     + "</span><span><b>" + esc(name) + "</b><small>" + esc(desc) + "</small></span></a>" + copiar + "</div>";
 }
 
-async function copiarPem(btn) {
-  const url = btn.getAttribute("data-copy");
-  const antes = btn.textContent;
+async function abrirPem(href, name, desc) {
+  S.pemView = { href, name, desc, pem: "", err: "", busy: true };
+  renderLayer();
   try {
-    const r = await fetch(url, { credentials: "same-origin" });
+    const r = await fetch(href, { credentials: "same-origin" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const txt = await r.text();
-    if (!/BEGIN CERTIFICATE/.test(txt)) throw new Error("não é PEM");
-    await navigator.clipboard.writeText(txt);
-    btn.textContent = "Copiado ✓";
+    if (!/BEGIN CERTIFICATE/.test(txt)) throw new Error("o arquivo não é PEM");
+    S.pemView.pem = txt.trim() + "\n";
   } catch (e) {
-    btn.textContent = "Falhou: " + (e.message || e);
+    S.pemView.err = String(e.message || e);
   }
-  setTimeout(() => { btn.textContent = antes; }, 2500);
+  S.pemView.busy = false;
+  renderLayer();
+}
+function pemModal() {
+  const v = S.pemView;
+  const n = (v.pem.match(/BEGIN CERTIFICATE/g) || []).length;
+  const dica = /chain/.test(v.name)
+    ? "É a cadeia da autoridade (intermediária + raiz) — o que o CertaSync pede colado em <i>Autoridades → CA local → CA de confiança</i>."
+    : /^ca\.crt$/.test(v.name) ? "Certificado da raiz — distribua para os pontos de confiança (estações, servidores, F5/A10)."
+    : "Certificado da intermediária.";
+  return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="pmt" tabindex="-1">'
+    + '<div class="modal-h"><div class="sec-title">Artefato público</div><h2 id="pmt" style="font-size:16px">' + esc(v.name) + " <small style=\"color:var(--muted);font-weight:400\">" + esc(v.desc) + "</small></h2></div>"
+    + '<div class="modal-b">'
+    + (v.busy ? '<div class="note">' + SVG.spin + " Carregando…</div>"
+      : v.err ? '<div class="note warn">' + SVG.alert + "<div><b>Não deu para ler o arquivo.</b> " + esc(v.err) + "</div></div>"
+      : '<div class="note">' + SVG.info + "<div>" + dica + (n > 1 ? " Contém <b>" + n + " certificados</b>; copie tudo, na ordem." : "") + "</div></div>"
+        + '<pre class="pem-box mono" tabindex="0">' + esc(v.pem) + "</pre>")
+    + "</div>"
+    + '<div class="modal-f">'
+    + '<a class="btn" href="' + esc(v.href) + '" download>' + SVG.dl + " Baixar</a>"
+    + (v.pem ? '<button class="btn primary" type="button" data-copy="' + esc(v.pem) + '" title="Copiar o PEM">' + SVG.copy + " Copiar PEM</button>" : "")
+    + '<button class="btn" data-act="close">Fechar</button></div></div>';
 }
 
 /* --- certificados --- */
@@ -1137,7 +1158,7 @@ async function openDetail(serial) {
   finally { if (S.detail) { S.detail.loading = false; renderLayer(); } }
 }
 function closeLayer() {
-  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null; S.tokenNew = null; S.tokenRevoke = null; S.backup = null;
+  S.detail = null; S.revoke = null; S.changepw = false; S.renew = null; S.tokenNew = null; S.tokenRevoke = null; S.backup = null; S.pemView = null;
   $("#layer").innerHTML = "";
   document.body.style.overflow = "";
   if (lastFocused && document.contains(lastFocused)) lastFocused.focus({ preventScroll: true });
@@ -1145,12 +1166,12 @@ function closeLayer() {
 }
 function renderLayer() {
   const L = $("#layer");
-  if (!S.detail && !S.revoke && !S.changepw && !S.renew && !S.tokenNew && !S.tokenRevoke && !S.backup) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
+  if (!S.detail && !S.revoke && !S.changepw && !S.renew && !S.tokenNew && !S.tokenRevoke && !S.backup && !S.pemView) { L.innerHTML = ""; document.body.style.overflow = ""; return; }
   if (!lastFocused) lastFocused = document.activeElement;
   document.body.style.overflow = "hidden";
   L.innerHTML = '<div class="scrim" data-act="close"></div>'
     + (S.changepw ? changePwModal() : S.renew ? renewModal() : S.revoke ? revokeModal()
-      : S.tokenNew ? tokenNewModal() : S.tokenRevoke ? tokenRevokeModal() : S.backup ? backupModal() : detailDrawer());
+      : S.tokenNew ? tokenNewModal() : S.tokenRevoke ? tokenRevokeModal() : S.backup ? backupModal() : S.pemView ? pemModal() : detailDrawer());
   const box = L.querySelector(".drawer,.modal");
   const first = box.querySelector("select,input,button:not([disabled])");
   (first || box).focus({ preventScroll: true });
@@ -1786,8 +1807,8 @@ document.addEventListener("click", (ev) => {
   if (copy) { ev.preventDefault(); ev.stopPropagation(); copyText(copy.dataset.copy, copy); return; }
   const tst = t.closest("[data-toast]");
   if (tst) { dismissToast(+tst.dataset.toast); return; }
-  const cp = t.closest("[data-copy]");
-  if (cp) { copiarPem(cp); return; }
+  const pv = t.closest("[data-pem]");
+  if (pv) { abrirPem(pv.dataset.pem, pv.dataset.pemName, pv.dataset.pemDesc); return; }
   const tab = t.closest("[data-tab]");
   if (tab) {
     S.view = tab.dataset.tab; const e = $("#errlog"); if (e) e.remove();
