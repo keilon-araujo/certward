@@ -326,6 +326,9 @@ pre.pem{
 .search input{padding-left:31px}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;align-items:start}
 .dlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+.dlwrap{display:flex;flex-direction:column;gap:6px}
+.dlcopy{align-self:flex-start;font:inherit;font-size:.8em;padding:4px 10px;border-radius:var(--r-sm);border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);cursor:pointer}
+.dlcopy:hover{border-color:var(--accent);color:var(--accent)}
 .dlcard{
   display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--border);
   border-radius:var(--r-sm);background:var(--surface-2);color:var(--text);text-decoration:none;
@@ -763,8 +766,29 @@ function crlCard(crl) {
     + "</div></div>";
 }
 function dlCard(href, name, desc) {
-  return '<a class="dlcard" href="' + esc(href) + '" data-dl="1" download><span class="dlic">' + SVG.dl
-    + "</span><span><b>" + esc(name) + "</b><small>" + esc(desc) + "</small></span></a>";
+  // .crt é PEM: além de baixar, dá para COPIAR o texto — é o que o CertaSync
+  // pede colado no campo "CA de confiança" (pedido de 07/09/2026). CRL é DER.
+  const copiar = /\.crt$/.test(name)
+    ? '<button type="button" class="dlcopy" data-copy="' + esc(href) + '" title="Copiar o PEM para a área de transferência">Copiar PEM</button>'
+    : "";
+  return '<div class="dlwrap"><a class="dlcard" href="' + esc(href) + '" data-dl="1" download><span class="dlic">' + SVG.dl
+    + "</span><span><b>" + esc(name) + "</b><small>" + esc(desc) + "</small></span></a>" + copiar + "</div>";
+}
+
+async function copiarPem(btn) {
+  const url = btn.getAttribute("data-copy");
+  const antes = btn.textContent;
+  try {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const txt = await r.text();
+    if (!/BEGIN CERTIFICATE/.test(txt)) throw new Error("não é PEM");
+    await navigator.clipboard.writeText(txt);
+    btn.textContent = "Copiado ✓";
+  } catch (e) {
+    btn.textContent = "Falhou: " + (e.message || e);
+  }
+  setTimeout(() => { btn.textContent = antes; }, 2500);
 }
 
 /* --- certificados --- */
@@ -1762,6 +1786,8 @@ document.addEventListener("click", (ev) => {
   if (copy) { ev.preventDefault(); ev.stopPropagation(); copyText(copy.dataset.copy, copy); return; }
   const tst = t.closest("[data-toast]");
   if (tst) { dismissToast(+tst.dataset.toast); return; }
+  const cp = t.closest("[data-copy]");
+  if (cp) { copiarPem(cp); return; }
   const tab = t.closest("[data-tab]");
   if (tab) {
     S.view = tab.dataset.tab; const e = $("#errlog"); if (e) e.remove();

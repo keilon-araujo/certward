@@ -10,6 +10,23 @@ A versão corrente vive no arquivo [`VERSION`](VERSION) na raiz — é a fonte
 
 ---
 
+## [1.3.2] — 2026-09-08
+
+### Adicionado
+
+- **"Copiar PEM" nos artefatos públicos da CA.** Cada cartão `.crt` (raiz,
+  intermediária, cadeia) ganha um botão que copia o PEM para a área de
+  transferência — é o que o CertaSync pede colado no campo "CA de
+  confiança", e até aqui era baixar, abrir no editor e colar.
+
+### Corrigido
+
+- **`https://ca.<domínio>/…` e `https://ocsp.<domínio>/…` caíam no console
+  com 404.** Os artefatos públicos e o OCSP vivem em HTTP (as URLs de AIA,
+  CRL e OCSP vão gravadas nos certificados sem porta); o navegador sobe para
+  HTTPS sozinho e o `default_server` do 443 respondia o console. Esses nomes
+  agora redirecionam para o `http://` correspondente.
+
 ## [1.3.1] — 2026-09-07
 
 ### Corrigido
